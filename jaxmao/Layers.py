@@ -37,9 +37,11 @@ class FC(Layer):
         self.shape['weights'] = (in_channels, out_channels)
         if self.use_bias:
             self.shape['bias'] = (out_channels, )
-        self.params = dict()
+        self.params = None
    
     def init_params(self, key):
+        self.params = dict()
+        
         key, w_key, b_key = random.split(key, 3)
         self.params['weights'] = self.weights_initializer(w_key, self.shape['weights'], self.dtype)
         if self.use_bias:
@@ -80,15 +82,17 @@ class Conv2D(Layer):
                 self.shape['weights'] = (out_channels, in_channels, kernel_size[0], kernel_size[1])
             if use_bias:
                 self.shape['bias'] = (out_channels, )
-            self.params = dict()
+            self.params = None
 
             
         def init_params(self, key):
+            self.params = dict()
             key, w_key, b_key = random.split(key, 3)
             self.params['weights'] = self.weights_initializer(w_key, self.shape['weights'], self.dtype)
             self.params['bias'] = self.bias_initializer(b_key, self.shape['bias'], self.dtype)
         
         def forward(self, params, x):
+            # ('NCHW', 'OIHW', 'NCHW')
             x = lax.conv_general_dilated(x, params['weights'], 
                                             window_strides=(self.strides, self.strides),
                                             padding="SAME") 

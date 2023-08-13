@@ -9,12 +9,10 @@ from jax import vmap
 from jax import random, Array
 from jax.random import PRNGKeyArray
 
-from jaxmao.Layers import FC
-
 class Module:    
     classes_that_have_params = (Layer, Activation)
-    layers = list()
-    params = list()
+    layers = None
+    params = None
     
     def __init__(self, layers=None):
         pass # define layers here 
@@ -30,23 +28,25 @@ class Module:
                 self.layers.append(layer)
                 self.params.append(layer.params)
                 
-    def _forward(self, params, x):
+    def __call__(self, x):
         """
             Define the forward pass of one data point under this name.
         """
         pass
-    
+                  
+    def _forward(self, params, x):
+        for i in range(len(params)):
+            self.layers[i].params = params[i]
+        return self.__call__(x)
+
     def forward(self, params, x):
+        return self._forward(params, x)
         return vmap(self._forward, in_axes=(None, 0))(params, x)
     
-    def __call__(self, x):
-        return self.forward(self.params, x)
-        
     def params_forward(self, params, x):
         for i in range(len(params)):
             self.layers[i].params = params[i]
         return self.forward(x)
-
     
     def backward(self, x, y):
         pass 

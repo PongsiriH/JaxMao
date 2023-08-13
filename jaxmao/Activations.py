@@ -1,6 +1,8 @@
 import jax.numpy as jnp
+from jaxmao.Layers import Layer
 
-class Activation:
+
+class Activation(Layer):
     def __init__(self):
         self.params = None
     
