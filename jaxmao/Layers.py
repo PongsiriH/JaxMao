@@ -11,8 +11,11 @@ class Layer:
     def forward(self, params, x):
         return vmap(self._forward, in_axes=(None, 0))(params, x)
     
-    def __call__(self, params, x):
-        return self.forward(params, x)
+    def __call__(self, x):
+        return self.forward(self.params, x)
+    
+    def init_params(self, key):
+        pass
     
 class FC(Layer):
     def __init__(self, 
@@ -31,7 +34,7 @@ class FC(Layer):
         self.dtype=dtype
         
         self.shape = dict()
-        self.shape['weights'] = (out_channels, in_channels)
+        self.shape['weights'] = (in_channels, out_channels)
         if self.use_bias:
             self.shape['bias'] = (out_channels, )
         self.params = dict()
@@ -87,8 +90,8 @@ class Conv2D(Layer):
         
         def forward(self, params, x):
             x = lax.conv_general_dilated(x, params['weights'], 
-                                            window_strides=(self.stride, self.stride),
-                                            padding="SAME")
+                                            window_strides=(self.strides, self.strides),
+                                            padding="SAME") 
             if self.use_bias:
                 x = lax.add(x, params['bias'][None, :, None, None])
             return x
