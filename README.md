@@ -1,4 +1,4 @@
-# JaxMao: Jax based Machine learning library
+# JaxMao: Another Machine learning library using Jax.
 
 If you find this, you are probably in a similar learning journey as me. I hope for this resource to be helpful to your journey. 
 

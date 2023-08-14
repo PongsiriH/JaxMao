@@ -15,7 +15,10 @@ class Module:
     params = None
     
     def __init__(self, layers=None):
-        pass # define layers here 
+        """
+            Define all layers you will use here.
+        """
+        pass
     
     def init_params(self, key : Array | PRNGKeyArray):
         self.layers = list()
@@ -30,46 +33,39 @@ class Module:
                 
     def __call__(self, x):
         """
-            Define the forward pass of one data point under this name.
+            Define the behavior of forward pass of one datapoint 
+            under this __call__ function.          
         """
         pass
                   
-    def _forward(self, params, x):
+    def forward(self, params, x):
+        """
+            forward function update `params of each layer` to the `provided params`.
+            Then predict using __call__.
+            
+            This function is particularly useful for training. We can take grad()
+            with respect to the `provided params`.
+        """
         for i in range(len(params)):
             self.layers[i].params = params[i]
         return self.__call__(x)
+    
+"""
+    Example:
 
-    def forward(self, params, x):
-        return self._forward(params, x)
-        return vmap(self._forward, in_axes=(None, 0))(params, x)
-    
-    def params_forward(self, params, x):
-        for i in range(len(params)):
-            self.layers[i].params = params[i]
-        return self.forward(x)
-    
-    def backward(self, x, y):
-        pass 
-        
-if __name__ == '__main__':
-    from jaxmao.Activations import ReLU, StableSoftmax
-    from jax import random
     class MNIST_Classifier(Module):
         def __init__(self):
-            self.fc1 = FC(784, 512)
-            self.fc2 = FC(512, 256)
-            self.fc3 = FC(256, 10)
+            self.conv1 = Conv2D(1, 32, 3, 2) 
+            self.flatten = Flatten()
+            self.fc1 = FC(32*14*14, 32)
+            self.fc2 = FC(32, 10)
             self.relu = ReLU()
             self.softmax = StableSoftmax()
-
-        def forward(self, x):
+            
+        def __call__(self, x):
+            x = self.relu(self.conv1(x))
+            x = self.flatten(x)
             x = self.relu(self.fc1(x))
-            x = self.relu(self.fc2(x))
-            x = self.softmax(self.fc3(x))
+            x = self.softmax(self.fc2(x))
             return x
-
-    
-    clf = MNIST_Classifier()
-    clf.init_params(random.PRNGKey(42))
-    # print(clf.params, type(clf.params))
-    print(clf.layers)
+"""
