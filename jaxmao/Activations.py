@@ -5,6 +5,7 @@ from jaxmao.Layers import Layer
 class Activation(Layer):
     def __init__(self):
         self.params = None
+        self.num_params = None
     
     def init_params(self, key):
         pass

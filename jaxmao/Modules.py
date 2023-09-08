@@ -9,7 +9,16 @@ from jax import vmap
 from jax import random, Array
 from jax.random import PRNGKeyArray
 
-class Module:    
+class InitializeLayersModule(type):
+    """
+        Help Module class initialize layers without having to explicitly declared.
+    """
+    def __call__(cls, *args, **kwargs):
+        instance = super(InitializeLayersModule, cls).__call__(*args, **kwargs)
+        instance.post_initialization()
+        return instance
+
+class Module(metaclass=InitializeLayersModule):    
     classes_that_have_params = (Layer, Activation)
     layers = None
     params = None
@@ -18,19 +27,28 @@ class Module:
         """
             Define all layers you will use here.
         """
-        pass
-    
-    def init_params(self, key : Array | PRNGKeyArray):
+        self.num_layers = None
+        self.num_params = None
+        
+    def post_initialization(self):
+        self.init_layers()
+        
+    def init_layers(self):
         self.layers = list()
         self.params = list()
-        
         for layer in self.__dict__.values():
             if isinstance(layer, self.classes_that_have_params):
-                key, subkey = random.split(key)
-                layer.init_params(subkey)
                 self.layers.append(layer)
-                self.params.append(layer.params)
-                
+        self.num_layers = len(self.layers)
+        
+        
+    def init_params(self, key : Array | PRNGKeyArray):            
+        for layer in self.layers:
+            key, subkey = random.split(key)
+            layer.init_params(subkey)
+            self.params.append(layer.params)
+        self.num_layers = len(self.layers)
+        
     def __call__(self, x):
         """
             Define the behavior of forward pass of one datapoint 
@@ -45,11 +63,20 @@ class Module:
             
             This function is particularly useful for training. We can take grad()
             with respect to the `provided params`.
+            
+            len(params) = number_of_layers in the module
         """
         for i in range(len(params)):
             self.layers[i].params = params[i]
         return self.__call__(x)
     
+    def count_params(self):
+        self.num_params = 0
+        for layer in self.layers:
+            self.num_params = self.num_params + layer.count_params()
+        return self.num_params
+
+
 """
     Example:
 
