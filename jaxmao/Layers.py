@@ -49,14 +49,6 @@ class FC(Layer):
             'biases' : bias_initializer
         }
    
-    # def init_params(self, key):
-    #     self.params = dict()
-        
-    #     key, w_key, b_key = random.split(key, 3)
-    #     self.params['weights'] = self.initializers['weights'](w_key, self.shapes['weights'], self.dtype)
-    #     if self.use_bias:
-    #         self.params['biases'] = self.initializers['biases'](b_key, self.shapes['biases'], self.dtype)
-            
     def _forward(self, params, x):
         x = x.astype(self.dtype)
         return jnp.add(
@@ -96,12 +88,6 @@ class Conv2D(Layer):
                 'weights' : weights_initializer,
                 'biases' : bias_initializer
             }
-            
-        # def init_params(self, key):
-        #     self.params = dict()
-        #     key, w_key, b_key = random.split(key, 3)
-        #     self.params['weights'] = self.initializers['weights'](w_key, self.shapes['weights'], self.dtype)
-        #     self.params['biases'] = self.initializers['biases'](b_key, self.shapes['biases'], self.dtype)
         
         def forward(self, params, x):
             # ('NCHW', 'OIHW', 'NCHW')
@@ -113,6 +99,9 @@ class Conv2D(Layer):
             return x
 
 class Flatten(Layer):
+    def __init__(self):
+        super().__init__()
+
     def _forward(self, params, x):
         return x.ravel()
 
@@ -132,22 +121,13 @@ class SimpleRNN(Layer):
         self.use_bias       = use_bias
         self.dtype = dtype
         
-        self.shape = {
+        self.shapes = {
             'weights_x' : (input_channel, output_channel),
             'weights_h' : (output_channel, output_channel),
         }
         if use_bias:
-            self.shape['biases_h'] = (output_channel, 1)
+            self.shapes['biases_h'] = (output_channel, 1)
         self.params = None
-        
-    def init_params(self, key):
-        Wx_key, Wh_key, bh_key, key = random.split(key, 4)
-        self.params = {
-            'weights_x' : random.normal(Wx_key, self.shape['weights_x']),
-            'weights_h' : random.normal(Wh_key, self.shape['weights_h'])
-        }
-        if self.use_bias:
-            self.params['biases_h'] = random.normal(bh_key, self.shape['biases_h'])
 
     def _forward(self, x):
         h  = jnp.zeros(self.output_channel, dtype=self.dtype)
