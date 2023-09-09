@@ -57,9 +57,9 @@ class FC(Layer):
             
     def _forward(self, params, x):
         x = x.astype(self.dtype)
-        x = lax.dot(x, params['weights'])
+        x = jnp.dot(x, params['weights'])
         if self.use_bias:
-            x = lax.add(x, params['biases'])
+            x = jnp.add(x, params['biases'])
         return x
          
 class Conv2D(Layer):
@@ -146,8 +146,47 @@ class SimpleRNN(Layer):
     def _forward(self, params, x):
         h  = jnp.zeros((self.out_channels,), dtype=self.dtype)        
         for current_x in x:
-            h = lax.add(lax.dot(params['weights_h'].T, h), lax.dot(params['weights_x'].T, current_x))
+            h = lax.add(lax.dot(h, params['weights_h']), lax.dot(current_x, params['weights_x']))
             if self.use_bias:
                 h = lax.add(h, params['biases_h'])
             h = lax.tanh(h)
         return h
+
+class LSTM(Layer):
+    def __init__(
+            self, 
+            num_features,
+            hidden_channels,
+            out_channels,
+            weights_initializer=HeNormal(),
+            bias_initializer=HeNormal(),
+            use_bias=True,
+            dtype=jnp.float32
+        ):
+        super().__init__()
+        pass
+    
+    def _forward(self, params, x):
+        h  = jnp.zeros((self.out_channels,), dtype=self.dtype)
+        
+class SimpleEmbedding(Layer):
+    def __init__(
+        self,
+        vocab_size,
+        embedding_dim,
+        weights_initializer=HeNormal(),
+        use_bias=True,
+        dtype=jnp.float32
+    ):
+        self.vocab_size    = vocab_size
+        self.embedding_dim = embedding_dim
+        # if vocab_size == 1:
+        #     self.shapes = {'weights' : (embedding_dim, )}
+        # else:
+        self.shapes = {'weights' : (embedding_dim, vocab_size)}
+            
+        self.initializers = {'weights' : weights_initializer}
+        self.dtype = dtype
+        
+    def _forward(self, params, x):
+        return lax.dot(x, params['weights'])
