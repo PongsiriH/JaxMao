@@ -32,6 +32,9 @@ class Layer:
             for layer in self.shapes.keys():
                 self.num_params = self.num_params + np.prod(self.shapes[layer])
         return self.num_params
+    
+    def summary(self):
+        pass
 
 class FC(Layer):
     def __init__(self, 
@@ -54,10 +57,12 @@ class FC(Layer):
             self.shapes['biases'] = (out_channels, )
             self.initializers['biases'] = bias_initializer
             
-            
-    def _forward(self, params, x):
+    def forward(self, params, x):
         x = x.astype(self.dtype)
-        x = jnp.dot(x, params['weights'])
+        xdim = len(x.shape)
+        x = lax.dot_general(x, params['weights'], 
+                            (((xdim-1,), (0,)), ((), ()))
+                        )
         if self.use_bias:
             x = jnp.add(x, params['biases'])
         return x
@@ -180,11 +185,8 @@ class SimpleEmbedding(Layer):
     ):
         self.vocab_size    = vocab_size
         self.embedding_dim = embedding_dim
-        # if vocab_size == 1:
-        #     self.shapes = {'weights' : (embedding_dim, )}
-        # else:
-        self.shapes = {'weights' : (embedding_dim, vocab_size)}
-            
+
+        self.shapes = {'weights' : (vocab_size, embedding_dim)}
         self.initializers = {'weights' : weights_initializer}
         self.dtype = dtype
         
