@@ -1,17 +1,20 @@
 import jax.numpy as jnp
 from jaxmao.Layers import Layer
 
+def relu(x):
+    return jnp.maximum(0, x)
 
 class Activation(Layer):
     def __init__(self):
         self.params = None
         self.num_params = None
-    
+        self.shapes = None
     def init_params(self, key):
         pass
-    
-    def __call__(self, x):
-        return self.calculate(self.params, x)
+    def _forward(self, params, x):
+        return self.calculate(params, x)
+    # def __call__(self, x):
+    #     return self.calculate(self.params, x)
     
 class ReLU(Activation):        
     def calculate(self, params, x):

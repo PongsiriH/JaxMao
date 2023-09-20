@@ -48,15 +48,19 @@ class Module(metaclass=InitializeLayersModule):
             layer.init_params(subkey)
             self.params.append(layer.params)
         self.num_layers = len(self.layers)
+    
+    def __call__(self, x, training=False):
+        # return self.forward_with_params(self.params, x, training)
+        return self.user_forward(x)
         
-    def __call__(self, x):
+    def user_forward(self, x):
         """
             Define the behavior of forward pass of one datapoint 
-            under this __call__ function.          
+            under this `user_forward` function.          
         """
         pass
                   
-    def forward(self, params, x):
+    def forward_with_params(self, params, x, training=False):
         """
             forward function update `params of each layer` to the `provided params`.
             Then predict using __call__.
@@ -68,7 +72,7 @@ class Module(metaclass=InitializeLayersModule):
         """
         for i in range(len(params)):
             self.layers[i].params = params[i]
-        return self.__call__(x)
+        return self.user_forward(x)
     
     def count_params(self):
         self.num_params = 0
