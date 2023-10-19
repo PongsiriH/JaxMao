@@ -1,12 +1,7 @@
 import jax
-from .initializers import HeN
+from .initializers import HeNormal
 import jax.numpy as jnp
 from jax import vmap, lax
-from jax import random
-import numpy as np
-
-
-import jax.numpy as jnp
 from jax import random
 import numpy as np
 
@@ -34,7 +29,7 @@ class Dense(Layer):
         self, 
         in_channels, 
         out_channels,
-        activation=None,
+        activation='relu',
         weights_initializer=HeNormal(),
         bias_initializer=HeNormal(),
         use_bias=True,
@@ -43,8 +38,11 @@ class Dense(Layer):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.use_bias = use_bias
-        if not activation:
+        
+        if activation in [None, 'linear']:
             activation = lambda x: x
+        elif activation == 'relu':
+            activation = ReLU()
         self.activation = activation
         
         self.shapes = {'weights' : (in_channels, out_channels)}
@@ -53,10 +51,12 @@ class Dense(Layer):
             self.shapes['biases'] = (out_channels, )
             self.initializers['biases'] = bias_initializer
         
-    def forward(self, params, x, state):
-        z = jnp.dot(x, params['weights']) + params['biases']
+    def forward(self, params, x, state=None):
+        z = jnp.dot(x, params['weights'])
+        if self.use_bias:
+            z = z + params['biases']
         return self.activation(z), None
-         
+    
 class Conv2D(Layer):
         def __init__(self, 
                     in_channels, 
@@ -91,7 +91,7 @@ class Conv2D(Layer):
                 self.initializers['biases'] = bias_initializer
                 
             self.forward = jax.jit(self.forward)
-        def forward(self, params, x):
+        def forward(self, params, x, state=None):
             # ('NCHW', 'OIHW', 'NCHW')
             x = lax.conv_general_dilated(x, params['weights'], 
                                             window_strides=(self.strides, self.strides),
@@ -99,23 +99,18 @@ class Conv2D(Layer):
                                             dimension_numbers=('NCHW', 'OIHW', 'NHWC')) 
             if self.use_bias:
                 x = lax.add(x, params['biases'][None, None, None, :]) # (batch_size, width, height, out_channels)
-            return x
+            return x, None
 
 class Flatten(Layer):
     def __init__(self):
         super().__init__()
 
-    def forward(self, params, x):
-        return x.reshape(x.shape[0], -1)
+    def forward(self, params, x, state=None):
+        return x.reshape(x.shape[0], -1), None
 
 """
     Batch Normalizations
 """
-def gamma_initializer(key, shape, dtype):
-    return jnp.ones(shape, dtype)        
-def beta_initializer(key, shape, dtype):
-    return jnp.zeros(shape, dtype)
-
 def gamma_initializer(key, shape, dtype):
     return jnp.ones(shape, dtype)        
 def beta_initializer(key, shape, dtype):
@@ -169,156 +164,36 @@ class BatchNorm(Layer):
         
         return scaled_x, new_state
 
-
 """
-    Recurrent Neural Network
+    Activation layers
 """
-class SimpleRNN(Layer):
-    def __init__(
-            self, 
-            num_features,
-            out_channels,
-            weights_initializer=HeNormal(),
-            bias_initializer=HeNormal(),
-            use_bias=True,
-            dtype=jnp.float32
-        ):
-        super().__init__()
-        self.num_features  = num_features
-        self.out_channels  = out_channels
-        self.use_bias      = use_bias
-        self.dtype         = dtype
+"""
+    Activation functions
+"""
+class Activation(Layer):
+    def __init__(self):
+        self.params = None
+        self.num_params = None
+        self.shapes = None
         
-        self.shapes = {
-            'weights_x' : (num_features, out_channels),
-            'weights_h' : (out_channels, out_channels),
-        }
-        self.initializers = {
-            'weights_x' : weights_initializer,
-            'weights_h' : weights_initializer,
-        }
-        if use_bias:
-            self.shapes['biases_h'] = (out_channels,)
-            self.initializers['biases_h'] = bias_initializer
-            
-
-    # def _forward(self, params, x):
-    #     h = jnp.zeros((self.out_channels,), dtype=self.dtype)
-    #     for current_x in x:
-    #         h = lax.add(lax.dot(h, params['weights_h']), lax.dot(current_x, params['weights_x']))
-    #         if self.use_bias:
-    #             h = lax.add(h, params['biases_h'])
-    #         h = lax.tanh(h)
-    #     return h
-    def _forward(self, params, x):
-        # python for-loop equivalent.
-        # for current_x in x:
-        #     h = lax.add(lax.dot(h, params['weights_h']), lax.dot(current_x, params['weights_x']))
-        #     if self.use_bias:
-        #         h = lax.add(h, params['biases_h'])
-        #     h = lax.tanh(h)
-        # return h
-        h = jnp.zeros((self.out_channels,), dtype=self.dtype)
-        def rnn_step(h, current_x):
-            h_new = lax.add(lax.dot(h, params['weights_h']), lax.dot(current_x, params['weights_x']))
-            if self.use_bias:
-                h_new = lax.add(h_new, params['biases_h'])
-            h_new = lax.tanh(h_new)
-            return h_new, None
-
-        final_h, _ = lax.scan(rnn_step, h, x)
-        return final_h
-
-class LSTM(Layer):
-    def __init__(
-            self, 
-            num_features,
-            out_channels,
-            weights_initializer=GlorotNormal(),
-            bias_initializer=GlorotNormal(),
-            use_bias=True,
-            dtype=jnp.float32
-        ):
-        super().__init__()
-        self.num_features = num_features
-        self.out_channels = out_channels
-        self.use_bias = use_bias
-        self.dtype = dtype
-
-        self.shapes = {
-            'weights_f': (num_features+out_channels, out_channels),
-            'weights_i': (num_features+out_channels, out_channels),
-            'weights_c': (num_features+out_channels, out_channels),
-            'weights_o': (num_features+out_channels, out_channels),
-        }
-        self.initializers = {
-            'weights_f': weights_initializer,
-            'weights_i': weights_initializer,
-            'weights_c': weights_initializer,
-            'weights_o': weights_initializer,
-        }
-        if use_bias:
-            self.shapes['biases_f'] = (out_channels,)
-            self.shapes['biases_i'] = (out_channels,)
-            self.shapes['biases_c'] = (out_channels,)
-            self.shapes['biases_o'] = (out_channels,)
-            self.initializers['biases_f'] = bias_initializer
-            self.initializers['biases_i'] = bias_initializer
-            self.initializers['biases_c'] = bias_initializer
-            self.initializers['biases_o'] = bias_initializer
-
-    def _forward(self, params, x):
-        h = jnp.zeros((self.out_channels,), dtype=self.dtype)
-        c = jnp.zeros((self.out_channels,), dtype=self.dtype)
-        def lstm_step(carry, current_x):
-            previous_h, previous_c = carry
-            combined_input = jnp.concatenate([current_x, previous_h], axis=0)
-            current_i = jax.nn.sigmoid(lax.dot(combined_input, params['weights_i']))
-            current_f = jax.nn.sigmoid(lax.dot(combined_input, params['weights_f']))
-            current_o = jax.nn.sigmoid(lax.dot(combined_input, params['weights_o']))
-            current_cbar = jnp.tanh(lax.dot(combined_input, params['weights_c']))
-            current_c = jnp.multiply(current_f, previous_c) + jnp.multiply(current_i, current_cbar)
-            current_h = jnp.multiply(current_o, jnp.tanh(current_c))
-            return (current_h, current_c), None
-        (h_final, c_final), _ = lax.scan(lstm_step, (h, c), x)
-        return h_final
-
-
-        
-class SimpleEmbedding(Layer):
-    def __init__(
-        self,
-        vocab_size,
-        embedding_dim,
-        weights_initializer=HeNormal(),
-        use_bias=True,
-        dtype=jnp.float32
-    ):
-        self.vocab_size    = vocab_size
-        self.embedding_dim = embedding_dim
-
-        self.shapes = {'weights' : (vocab_size, embedding_dim)}
-        self.initializers = {'weights' : weights_initializer}
-        self.dtype = dtype
-        
-    def _forward(self, params, x):
-        return jnp.take(params['weights'], x, axis=0)
-
-# class SimpleEmbedding(Layer):
-#     def __init__(
-#             self,
-#             vocab_size,
-#             embedding_dim,
-#             weights_initializer=HeNormal(),
-#             use_bias=True,
-#             dtype=jnp.float32
-#     ):
-#         self.vocab_size = vocab_size
-#         self.embedding_dim = embedding_dim
-#
-#         self.shapes = {'weights': (vocab_size, embedding_dim)}
-#         self.initializers = {'weights': weights_initializer}
-#         self.dtype = dtype
-#
-#     def _forward(self, params, x):
-#         return jnp.take(params['weights'], x, axis=0)
+    def init_params(self, key):
+        pass
+    
+    def forward(self, params, x, state=None):
+        return self.calculate(params, x), state
+    
+    def __call__(self, x, state=None):
+        return self.calculate(params=None, x=x)
+    
+class ReLU(Activation):        
+    def calculate(self, params, x):
+        return jnp.maximum(0, x)
+    
+class StableSoftmax(Activation):        
+    def calculate(self, params, x, axis=-1):
+        logits = x
+        max_logits = jnp.max(logits, axis=axis, keepdims=True)
+        shifted_logits = logits - max_logits
+        exp_shifted_logits = jnp.exp(shifted_logits)
+        softmax_probs = exp_shifted_logits / jnp.sum(exp_shifted_logits, axis=axis, keepdims=True)
+        return softmax_probs

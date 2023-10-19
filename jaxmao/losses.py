@@ -1,7 +1,8 @@
 import jax.numpy as jnp
-from jax import grad
+from jax import grad, jit
 
 class Loss:
+    @jit
     def __call__(self, y_pred, y_true):
         return self.calculate_loss(y_pred, y_true)
 

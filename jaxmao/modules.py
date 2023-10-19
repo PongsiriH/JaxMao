@@ -1,13 +1,7 @@
-import sys
-sys.path.append("/home/jaxmao/JaxMao")
-
-from jaxmao.layers import Layer
-from jaxmao.activations import Activation
-
-import jax.numpy as jnp
-from jax import vmap
-from jax import random, Array
-from jax.random import PRNGKeyArray
+from jaxmao.metrics import Metric
+from jax import random, jit, value_and_grad
+from sklearn.utils import shuffle
+import numpy as np
 
 class InitializeLayersModule(type):
     """
@@ -18,85 +12,137 @@ class InitializeLayersModule(type):
         instance.post_initialization()
         return instance
 
-class Module(metaclass=InitializeLayersModule):    
-    classes_that_have_params = (Layer, Activation)
-    layers = None
-    params = None
-    
-    def __init__(self, layers=None):
-        """
-            Define all layers you will use here.
-        """
-        self.num_layers = None
-        self.num_params = None
+class Module:
+    def __init__(self):
+        self.layers = {}
+        self.state = {}
+        self.params = {}
+        self.loss = None
+        self.optimizer = None
+        self.metrics = None
         
     def post_initialization(self):
         self.init_layers()
         
     def init_layers(self):
-        self.layers = list()
-        self.params = list()
-        for layer in self.__dict__.values():
+        self.layers = dict()
+        self.params = dict()
+        for i, layer in enumerate(self.__dict__.values()):
             if isinstance(layer, self.classes_that_have_params):
                 self.layers.append(layer)
-        self.num_layers = len(self.layers)
-        
-        
-    def init_params(self, key : Array | PRNGKeyArray):            
-        for layer in self.layers:
+        self.num_layers = len(self.layers)    
+    
+    def init_params(self, key):            
+        for name in self.layers:
             key, subkey = random.split(key)
-            layer.init_params(subkey)
-            self.params.append(layer.params)
+            self.layers[name].init_params(subkey)
+            self.params[name] = self.layers[name].params
         self.num_layers = len(self.layers)
+        return self.params
     
-    def __call__(self, x, training=False):
-        # return self.forward_with_params(self.params, x, training)
-        return self.user_forward(x)
+    def add(self, name, layer):
+        self.layers[name] = layer
+        if hasattr(layer, 'state'):
+            self.state[name] = layer.state
+    
+    def forward(self, params, x, state):
+        raise NotImplementedError("The forward method should be overridden by subclass")
+
+    def pure_forward(self, params, x, state):
+        """A pure function for the forward pass, to be used with JAX transformations."""
+        out, new_state = self.forward(params, x, state)
+        return out, new_state
+    
+    def __call__(self, params, x):
+        out, new_state = self.forward(params, x, self.state)
+        self.state.update(new_state)
+        return out
+
+    def forward_with_state(self, params, x, name, state):
+        if name in self.layers:
+            layer = self.layers[name]
+            if isinstance(params, dict):
+                if name in params:
+                    x, layer_state = layer(params[name], x)
+                    state[name] = layer_state
+                else:
+                    x, layer_state = layer(params, x)
+                    state = layer_state
+        return x, state
+    
+    def update_state(self, new_state):
+        for name, layer in self.layers.items():
+            if isinstance(layer.state, dict):
+                layer.state.update(new_state[name])
+                self.state[name] = layer.state
+
+    def compile(
+        self, loss_fn, optimizer, metrics=None
+    ):
+        if loss_fn:
+            self.loss_fn = loss_fn
+        if optimizer:
+            self.optimizer = optimizer
+        if metrics:
+            if isinstance(metrics, dict):
+                self.metrics = metrics
+            elif isinstance(metrics, list):
+                self.metrics = {metric.name if metric.name else f'metric_{n}': metric for n, metric in enumerate(self.metrics)}
+            elif isinstance(metrics, Metric):
+                self.metrics = {metrics.name: metrics}
+        else:
+            self.metrics = dict()
         
-    def user_forward(self, x):
-        """
-            Define the behavior of forward pass of one datapoint 
-            under this `user_forward` function.          
-        """
-        pass
-                  
-    def forward_with_params(self, params, x, training=False):
-        """
-            forward function update `params of each layer` to the `provided params`.
-            Then predict using __call__.
+    def fit(
+        self,
+        X, y, lr=0.01, epochs=1, batch_size=32,
+        X_val=None, y_val=None
+            ):
+        def aux_loss_fn(
+            method, params, state,
+            X, y, loss_fn, metrics
+                ):
+            # not pure because of model
+            y_pred, new_state = jit(method)(params, X, state)
             
-            This function is particularly useful for training. We can take grad()
-            with respect to the `provided params`.
+            # calculate metrics
+            metric_values = dict()
+            for metric_name, metric in metrics.items():
+                metric_value = metric(y_pred, y)
+                metric_values[metric_name] = metric_value
+                
+            # calculate loss
+            loss = jit(loss_fn.calculate_loss)(y_pred, y)
+            return loss, (new_state, metric_values)
+        
+        loss_and_grad = value_and_grad(aux_loss_fn, argnums=1, has_aux=True)
+        
+        optim_state = None
+        num_batch = len(X) // batch_size 
+        for epoch in range(epochs):
+            losses = 0.0
+            epoch_metrics = {name: 0.0 for name in self.metrics.keys()}  # Initialize metrics for the epoch
+
+            X, y = shuffle(X, y)
+            for n in range(num_batch):
+                batch_x = X[n*batch_size:(n+1)*batch_size]
+                batch_y = y[n*batch_size:(n+1)*batch_size]
+                (loss, (new_state, batch_metrics)), gradients = loss_and_grad(
+                                                            self.pure_forward, 
+                                                            self.params, 
+                                                            self.state, 
+                                                            batch_x, 
+                                                            batch_y, 
+                                                            self.loss_fn,
+                                                            self.metrics
+                                                                )
+                losses += loss
+                for name, value in batch_metrics.items():
+                    epoch_metrics[name] += value  # Aggregate metric values
+                self.params, optim_state = self.optimizer.step(self.params, gradients, lr, optim_state)
+                self.update_state(new_state)
             
-            len(params) = number_of_layers in the module
-        """
-        for i in range(len(params)):
-            self.layers[i].params = params[i]
-        return self.user_forward(x)
-    
-    def count_params(self):
-        self.num_params = 0
-        for layer in self.layers:
-            self.num_params = self.num_params + layer.count_params()
-        return self.num_params
-
-
-"""
-    Example:
-
-    class MNIST_Classifier(Module):
-        def __init__(self):
-            self.conv1 = Conv2D(1, 32, 3, 2) 
-            self.flatten = Flatten()
-            self.fc1 = FC(32*14*14, 32)
-            self.fc2 = FC(32, 10)
-            self.relu = ReLU()
-            self.softmax = StableSoftmax()
-            
-        def __call__(self, x):
-            x = self.relu(self.conv1(x))
-            x = self.flatten(x)
-            x = self.relu(self.fc1(x))
-            x = self.softmax(self.fc2(x))
-            return x
-"""
+            for name in epoch_metrics.keys():
+                epoch_metrics[name] /= num_batch
+            msg_metric = ' '.join([f"{name}: {value}" for name, value in epoch_metrics.items()])
+            print(f'epoch {epoch}: Loss {losses/num_batch}; {msg_metric}')
