@@ -1,5 +1,5 @@
 import jax.numpy as jnp
-from .layers import Layer
+from jaxmao.Layers import Layer
 
 def relu(x):
     return jnp.maximum(0, x)

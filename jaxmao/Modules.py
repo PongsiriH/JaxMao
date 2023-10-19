@@ -1,8 +1,8 @@
 import sys
 sys.path.append("/home/jaxmao/JaxMao")
 
-from jaxmao.Layers import Layer
-from jaxmao.Activations import Activation
+from jaxmao.layers import Layer
+from jaxmao.activations import Activation
 
 import jax.numpy as jnp
 from jax import vmap

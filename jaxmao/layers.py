@@ -1,11 +1,10 @@
 import jax
-from jaxmao.Initializers import *
-from jaxmao.utils import _ensure_stateful
-import numpy as np
-
+from .initializers import *
 import jax.numpy as jnp
 from jax import vmap, lax
 from jax import random
+import numpy as np
+
 
 class Layer:
     def __init__(self, dtype=jnp.float32):
@@ -14,18 +13,7 @@ class Layer:
         self.shapes = None
         self.initializers = None
         self.num_params = None
-     
-    def forward(self, params, x):
-        return vmap(self._forward, in_axes=(None, 0))(params, x)
-    
-    def _forward_stateful(self, params, x):
-        x = _ensure_stateful(x)
-        results = _ensure_stateful(self.forward(params, x[0]))
-        self._update_running_statistics(results[1])
-        return results
-    
-    def __call__(self, x):
-        return self._forward_stateful(self.params, x)
+        self.state = None
     
     def init_params(self, key):
         if self.shapes:
@@ -33,52 +21,37 @@ class Layer:
             for layer in self.shapes.keys():
                 key, subkey = random.split(key)
                 self.params[layer] = self.initializers[layer](subkey, self.shapes[layer], dtype=self.dtype)
-    
-    def _update_running_statistics(self, running_statistics):
-        return None
-    
-    def count_params(self):
-        self.num_params = 0
-        if self.shapes:
-            for layer in self.shapes.keys():
-                self.num_params = self.num_params + np.prod(self.shapes[layer])
-        return self.num_params
-    
-    def summary(self):
-        pass
-
-class FC(Layer):
-    def __init__(self, 
-                 in_channels, 
-                 out_channels,
-                 weights_initializer=HeNormal(),
-                 bias_initializer=HeNormal(),
-                 use_bias=True,
-                 dtype=jnp.float32
-        ):
+              
+    def __call__(self, params, x):
+        return self.forward(params, x, self.state)
+        
+class Dense(Layer):
+    def __init__(
+        self, 
+        in_channels, 
+        out_channels,
+        activation=None,
+        weights_initializer=HeNormal(),
+        bias_initializer=HeNormal(),
+        use_bias=True,
+    ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.use_bias = use_bias
-        self.dtype = dtype
+        if not activation:
+            activation = lambda x: x
+        self.activation = activation
         
         self.shapes = {'weights' : (in_channels, out_channels)}
         self.initializers = {'weights' : weights_initializer}
         if self.use_bias:
             self.shapes['biases'] = (out_channels, )
             self.initializers['biases'] = bias_initializer
-
-        self.forward = jax.jit(self.forward)
-    def forward(self, params, x):
-        x = lax.dot_general(x.astype(self.dtype), params['weights'],
-                            (((len(x.shape)-1,), (0,)), ((), ()))
-                        )
-        return lax.cond(
-            self.use_bias,
-            lambda _: jnp.add(x, lax.broadcast(params['biases'], x.shape[:-1]) ),
-            lambda _: x,
-            None
-        )
+        
+    def forward(self, params, x, state):
+        z = jnp.dot(x, params['weights']) + params['biases']
+        return self.activation(z), None
          
 class Conv2D(Layer):
         def __init__(self, 
