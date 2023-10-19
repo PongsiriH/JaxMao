@@ -1,10 +1,14 @@
 import jax
-from .initializers import *
+from .initializers import HeN
 import jax.numpy as jnp
 from jax import vmap, lax
 from jax import random
 import numpy as np
 
+
+import jax.numpy as jnp
+from jax import random
+import numpy as np
 
 class Layer:
     def __init__(self, dtype=jnp.float32):
@@ -112,19 +116,27 @@ def gamma_initializer(key, shape, dtype):
 def beta_initializer(key, shape, dtype):
     return jnp.zeros(shape, dtype)
 
-class BatchNorma1D(Layer):
+def gamma_initializer(key, shape, dtype):
+    return jnp.ones(shape, dtype)        
+def beta_initializer(key, shape, dtype):
+    return jnp.zeros(shape, dtype)
+
+class BatchNorm(Layer):
     def __init__(
         self,
         num_features,
         momentum = 0.5,
-        dtype=jnp.float32,
         eps=1e-5
         ):
         super().__init__()
-        self.moving_mean = 0
-        self.moving_var = 1
-        self.momentum = momentum
         self.eps = eps
+        
+        self.state = {
+            'running_mean' : jnp.zeros((num_features,)),
+            'running_var' : jnp.ones((num_features,)),
+            'momentum' : momentum,
+            'training' : True
+        }
         
         self.shapes = {
             'gamma' : (1, num_features),
@@ -134,36 +146,28 @@ class BatchNorma1D(Layer):
             'gamma' : gamma_initializer,
             'beta' : beta_initializer
         }
-        self.dtype = dtype
-    
-    def forward(self, params, x, training=False):
-        x, (moving_mean, moving_var) = x
-        if training:
-            batch_mean = x.mean(axis=0)
-            batch_var = x.var(axis=0)
-            moving_mean = self.momentum * moving_mean + (1 - self.momentum) * batch_mean
-            moving_var = self.momentum * moving_var + (1 - self.momentum) * batch_var
-            return jnp.multiply(
-                        (x - batch_mean) / jnp.sqrt(batch_var + self.eps), params['gamma']
-                    ) + params['beta'], (moving_mean, moving_var)
-        return jnp.multiply(
-                (x - moving_mean) / jnp.sqrt(moving_var + self.eps), params['gamma']
-            ) + params['beta']
-    
-    def _update_running_statistics(self, running_statistics):
-        moving_mean, moving_var = running_statistics
-        self.moving_mean = moving_mean
-        self.moving_var = moving_var
         
-    # def __call__(self, x, training=False):
-    #     results = self.forward(self.params, x, (self.moving_mean, self.moving_var), training=training)
-    #     if len(results) == 2 and type(results[1]) == tuple and self._update_running_statistics:
-    #         self._update_running_statistics(results[1])
-    #         results = results[0]
-    #     return results
-
-
-
+    def forward(self, params, x, state):
+        batch_mean = jnp.mean(x, axis=0)
+        batch_var = jnp.var(x, axis=0)
+        
+        new_running_mean = state['running_mean']
+        new_running_var = state['running_var']
+        if state['training']:
+            new_running_mean = state['momentum'] * state['running_mean'] + (1 - state['momentum']) * batch_mean
+            new_running_var = state['momentum'] * state['running_var'] + (1 - state['momentum']) * batch_var
+        
+        normalized_x = (x - batch_mean) / jnp.sqrt(batch_var + self.eps)
+        scaled_x = normalized_x * params['gamma'] + params['beta']
+        
+        new_state = {
+            'running_mean': new_running_mean,
+            'running_var': new_running_var,
+            'momentum' : state['momentum'],
+            'training' : state['training']
+        }
+        
+        return scaled_x, new_state
 
 
 """
