@@ -1,3 +1,5 @@
+import warnings
+
 import jax
 from .initializers import HeNormal
 import jax.numpy as jnp
@@ -35,15 +37,15 @@ class Dense(Layer):
         use_bias=True,
     ):
         super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.use_bias = use_bias
-        
         if activation in [None, 'linear']:
-            activation = lambda x: x
+            activation = Linear()
         elif activation == 'relu':
             activation = ReLU()
         self.activation = activation
+        
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.use_bias = use_bias
         
         self.shapes = {'weights' : (in_channels, out_channels)}
         self.initializers = {'weights' : weights_initializer}
@@ -62,14 +64,25 @@ class Conv2D(Layer):
                     in_channels, 
                     out_channels, 
                     kernel_size, 
-                    strides=1, 
-                    use_bias=True, 
+                    strides=1,
+                    activation='relu',
                     padding='SAME',
+                    use_bias=True, 
                     weights_initializer=HeNormal(),
                     bias_initializer=HeNormal(),
                     dtype=jnp.float32
             ):
             super().__init__()
+            if not padding in ['SAME', 'SAME_LOWER', 'VALID']:
+                warnings.warn(f"Unsupported padding type: {padding}. Using 'SAME' as default.")
+                self.padding = 'SAME'
+            
+            if activation in [None, 'linear']:
+                activation = Linear()
+            elif activation == 'relu':
+                activation = ReLU()
+            self.activation = activation
+            
             self.in_channels = in_channels
             self.out_channels = out_channels
             self.kernel_size = kernel_size
@@ -92,14 +105,14 @@ class Conv2D(Layer):
                 
             self.forward = jax.jit(self.forward)
         def forward(self, params, x, state=None):
-            # ('NCHW', 'OIHW', 'NCHW')
+            # ('NHWC', 'HWIO', 'NHWC')
             x = lax.conv_general_dilated(x, params['weights'], 
                                             window_strides=(self.strides, self.strides),
                                             padding=self.padding,
-                                            dimension_numbers=('NCHW', 'OIHW', 'NHWC')) 
+                                            dimension_numbers=('NHWC', 'OIHW', 'NHWC')) 
             if self.use_bias:
                 x = lax.add(x, params['biases'][None, None, None, :]) # (batch_size, width, height, out_channels)
-            return x, None
+            return self.activation(x), None
 
 class Flatten(Layer):
     def __init__(self):
@@ -164,6 +177,12 @@ class BatchNorm(Layer):
         
         return scaled_x, new_state
 
+    def set_inference_mode(self):
+        self.state['training'] = True
+    
+    def set_evaluation_mode(self):
+        self.state['training'] = False
+    
 """
     Activation layers
 """
@@ -184,11 +203,15 @@ class Activation(Layer):
     
     def __call__(self, x, state=None):
         return self.calculate(params=None, x=x)
+
+class Linear(Activation):        
+    def calculate(self, params, x):
+        return x
     
 class ReLU(Activation):        
     def calculate(self, params, x):
         return jnp.maximum(0, x)
-    
+
 class StableSoftmax(Activation):        
     def calculate(self, params, x, axis=-1):
         logits = x
