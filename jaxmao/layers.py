@@ -7,6 +7,18 @@ from jax import vmap, lax
 from jax import random
 import numpy as np
 
+"""
+    Helper functions.
+"""
+def ones_initializer(key, shape, dtype):
+    return jnp.ones(shape, dtype)   
+     
+def zeros_initializer(key, shape, dtype):
+    return jnp.zeros(shape, dtype)
+
+"""
+    Layers
+"""
 class Layer:
     def __init__(self, dtype=jnp.float32):
         self.dtype = dtype
@@ -62,8 +74,11 @@ class Layer:
     
     def set_inference_mode(self):
         self.state['training'] = False
-        
-class Dense(Layer):
+
+"""
+    Denses
+"""
+class SimpleDense(Layer):
     def __init__(
         self, 
         in_channels, 
@@ -84,18 +99,47 @@ class Dense(Layer):
         self.out_channels = out_channels
         self.use_bias = use_bias
         
-        self.shapes = {'weights' : (in_channels, out_channels)}
-        self.initializers = {'weights' : weights_initializer}
-        if self.use_bias:
-            self.shapes['biases'] = (out_channels, )
-            self.initializers['biases'] = bias_initializer
-        
+        self.shapes = {
+            'weights' : (in_channels, out_channels),
+            'biases'  : (out_channels, )
+        }
+        self.initializers = {
+            'weights' : weights_initializer,
+            'biases': bias_initializer if self.use_bias else zeros_initializer
+        }
     def forward(self, params, x, state=None):
-        z = jnp.dot(x, params['weights'])
-        if self.use_bias:
-            z = z + params['biases']
+        z = jnp.dot(x, params['weights']) + params['biases']
         return self.activation(z), None
     
+class Dense(Layer):
+    def __init__(
+        self, 
+        in_channels, 
+        out_channels,
+        activation='relu',
+        batch_norm=False,
+        momentum=0.5,
+        weights_initializer=HeNormal(),
+        bias_initializer=HeNormal(),
+        use_bias=True,
+    ):
+        super().__init__()
+        self.layers = {
+            'dense/simple_dense' : SimpleDense(in_channels, out_channels, activation='linear',
+                                               weights_initializer=weights_initializer,
+                                               bias_initializer=bias_initializer,
+                                               use_bias=use_bias
+                                               ),
+            'dense/batch_norm'   : BatchNorm(out_channels, momentum=momentum)
+        }
+        self.activation = Activation(act=activation)
+        
+    def forward(self, params, x, state=None):
+        x, state = self.apply(self.params, x, 'dense/simple_dense', self.state)
+        x, state = self.apply(self.params, x, 'dense/batch_norm', self.state)
+        return self.activation(x), state
+
+
 class Conv2D(Layer):
         def __init__(self, 
                     in_channels, 
@@ -132,17 +176,19 @@ class Conv2D(Layer):
             self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
             self.dtype = dtype
             
-            self.shapes = dict()
-            self.initializers = dict()
-            if isinstance(kernel_size, int):
-                self.shapes['weights'] = (kernel_size, kernel_size, in_channels, out_channels)
-            elif isinstance(kernel_size, tuple):
-                self.shapes['weights'] = (kernel_size[0], kernel_size[1], in_channels, out_channels)
-            self.initializers['weights'] = weights_initializer
+            self.shapes = {
+                'biases': (out_channels,),
+                'weights': (
+                    (kernel_size, kernel_size, in_channels, out_channels) if isinstance(kernel_size, int)
+                    else (kernel_size[0], kernel_size[1], in_channels, out_channels)
+                )
+            }
 
-            if use_bias:
-                self.shapes['biases'] = (out_channels, )
-                self.initializers['biases'] = bias_initializer
+            self.initializers = {
+                'biases': bias_initializer if use_bias else zeros_initializer,
+                'weights': weights_initializer
+            }
+
                 
         def forward(self, params, x, state=None):
             x = lax.conv_general_dilated(x, params['weights'], 
@@ -152,8 +198,7 @@ class Conv2D(Layer):
                                             rhs_dilation=self.dilation,
                                             dimension_numbers=('NHWC', 'HWIO', 'NHWC')
                                             ) 
-            if self.use_bias:
-                x = lax.add(x, params['biases'][None, None, None, :]) # (batch_size, width, height, out_channels)
+            x = lax.add(x, params['biases'][None, None, None, :]) # (batch_size, width, height, out_channels)
             return self.activation(x), None
 
 class DepthwiseConv2D(Layer):
@@ -192,17 +237,19 @@ class DepthwiseConv2D(Layer):
             self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
             self.dtype = dtype
             
-            self.shapes = dict()
-            self.initializers = dict()
-            if isinstance(kernel_size, int):
-                self.shapes['weights'] = (kernel_size, kernel_size, self.depth_multiplier, in_channels)
-            elif isinstance(kernel_size, tuple):
-                self.shapes['weights'] = (kernel_size[0], kernel_size[1], self.depth_multiplier, in_channels)
-            self.initializers['weights'] = weights_initializer
+            # Initialize the shapes and initializers dictionaries directly
+            self.shapes = {
+                'biases': (self.out_channels,),
+                'weights': (
+                    (kernel_size, kernel_size, self.depth_multiplier, in_channels) if isinstance(kernel_size, int)
+                    else (kernel_size[0], kernel_size[1], self.depth_multiplier, in_channels)
+                )
+            }
 
-            if use_bias:
-                self.shapes['biases'] = (self.out_channels, )
-                self.initializers['biases'] = bias_initializer
+            self.initializers = {
+                'biases': bias_initializer if use_bias else zeros_initializer,
+                'weights': weights_initializer
+            }
         
         def forward(self, params, x, state=None):
             x = lax.conv_general_dilated(x, params['weights'], 
@@ -213,11 +260,10 @@ class DepthwiseConv2D(Layer):
                                             dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
                                             feature_group_count=self.out_channels
                                             ) 
-            if self.use_bias:
-                # Broadcasting the biases across the batch and spatial dimensions.
-                # have out_channels biases.
-                # (batch_size, width, height, out_channels)
-                x = lax.add(x, params['biases'][None, None, None, :]) 
+            # Broadcasting the biases across the batch and spatial dimensions.
+            # have out_channels biases.
+            # (batch_size, width, height, out_channels)
+            x = lax.add(x, params['biases'][None, None, None, :]) 
             return self.activation(x), None
 
 class DepthwiseSeparableConv2D(Layer):
@@ -272,11 +318,6 @@ class Flatten(Layer):
 """
     Batch Normalizations
 """
-def gamma_initializer(key, shape, dtype):
-    return jnp.ones(shape, dtype)        
-def beta_initializer(key, shape, dtype):
-    return jnp.zeros(shape, dtype)
-        
 class BatchNorm(Layer):
     def __init__(
         self,
@@ -302,8 +343,8 @@ class BatchNorm(Layer):
             'beta'  : (num_features, ),
         }
         self.initializers = {
-            'gamma' : gamma_initializer,
-            'beta' : beta_initializer
+            'gamma' : ones_initializer,
+            'beta' : zeros_initializer
         }
         
     def forward(self, params, x, state):
@@ -343,13 +384,25 @@ class BatchNorm2D(BatchNorm):
         super().__init__(num_features=num_features, momentum=momentum, axis_mean=(0, 1, 2), eps=eps)
         
 """
-    Activation layers
-"""
-"""
-    Activation functions
+    Activation layers/functions
 """
 class Activation(Layer):
-    def __init__(self):
+    def __new__(cls, act=None):
+        if cls is not Activation:  # Skip for subclasses
+            return super(Activation, cls).__new__(cls)
+        
+        if isinstance(act, Activation):
+            return act
+        
+        act = act.lower() if isinstance(act, str) else act
+        if act == 'relu':
+            return ReLU()
+        elif act == 'softmax':
+            return StableSoftmax()
+        else:
+            return Linear()
+        
+    def __init__(self, **kwargs):
         super().__init__()
         self.params = None
         self.num_params = None
@@ -365,20 +418,20 @@ class Activation(Layer):
         return self.calculate(params=None, x=x)
 
 class Linear(Activation):
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
         
     def calculate(self, params, x):
         return x
     
 class ReLU(Activation):
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
     def calculate(self, params, x):
         return jnp.maximum(0, x)
 
 class StableSoftmax(Activation):    
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
         
     def calculate(self, params, x, axis=-1):
