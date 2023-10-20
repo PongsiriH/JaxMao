@@ -5,10 +5,13 @@ class Metric:
         self.name = name
 
     def __call__(self, y_pred, y_true):
-        if len(y_pred.shape) != 1:
+        if len(y_pred.shape) == 2:
             y_pred = y_pred.argmax(axis=1)
-        if len(y_true.shape) != 1:
+        if len(y_true.shape) == 2:
             y_true = y_true.argmax(axis=1)
+        elif len(y_true.shape) == 1:
+            # Assuming y_true is label-encoded as a 1D array
+            y_true = y_true.reshape(-1, 1)
         
         return self.calculate(y_pred, y_true)
 
@@ -42,7 +45,6 @@ class Precision(Metric):
         tp = true_positives(y_pred, y_true)
         fp = false_positives(y_pred, y_true)
         return tp / (tp + fp) if (tp + fp) > 0 else 0
-
 
 class Recall(Metric):
     def __init__(self, name='recall'):
