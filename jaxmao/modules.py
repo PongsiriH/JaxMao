@@ -20,6 +20,7 @@ class Module:
         self.loss = None
         self.optimizer = None
         self.metrics = None
+        self.summary = '{:<20} {:<20} {:<20}\n'.format('layer', 'output shape', '#\'s params')
         
     def post_initialization(self):
         self.init_layers()
@@ -58,6 +59,9 @@ class Module:
         self.state.update(new_state)
         return out
 
+    def apply(self, params, x, name, state):
+        return self.forward_with_state(params, x, name, state)
+    
     def forward_with_state(self, params, x, name, state):
         if name in self.layers:
             layer = self.layers[name]
@@ -68,6 +72,7 @@ class Module:
                 else:
                     x, layer_state = layer(params, x)
                     state = layer_state
+            self.summary += '{:<20} {:<20} {:<20}\n'.format(name, str(x.shape), layer.num_params + layer.num_states)
         return x, state
     
     def update_state(self, new_state):
@@ -75,14 +80,12 @@ class Module:
             if isinstance(layer.state, dict):
                 layer.state.update(new_state[name])
                 self.state[name] = layer.state
-
+        
     def compile(
         self, loss_fn, optimizer, metrics=None
     ):
-        if loss_fn:
-            self.loss_fn = loss_fn
-        if optimizer:
-            self.optimizer = optimizer
+        self.loss_fn = loss_fn
+        self.optimizer = optimizer
         if metrics:
             if isinstance(metrics, dict):
                 self.metrics = metrics
@@ -92,7 +95,17 @@ class Module:
                 self.metrics = {metrics.name: metrics}
         else:
             self.metrics = dict()
-        
+    
+    def set_evaluation_mode(self):
+        for layer in self.layers:
+            if hasattr(layer, 'set_evaluation_mode'):
+                layer.set_evaluation_mode()
+
+    def set_inference_mode(self):
+        for layer in self.layers:
+            if hasattr(layer, 'set_inference_mode'):
+                layer.set_inference_mode()        
+    
     def fit(
         self,
         X, y, lr=0.01, epochs=1, batch_size=32,
@@ -146,3 +159,7 @@ class Module:
                 epoch_metrics[name] /= num_batch
             msg_metric = ' '.join([f"{name}: {value}" for name, value in epoch_metrics.items()])
             print(f'epoch {epoch}: Loss {losses/num_batch}; {msg_metric}')
+
+    def summarize(self):
+        print(self.summary)
+        return self.summary
