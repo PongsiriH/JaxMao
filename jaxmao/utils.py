@@ -1,4 +1,4 @@
-import pickle
+import pickle, cv2
 
 def _ensure_stateful(inputs):
     if isinstance(inputs, list):
