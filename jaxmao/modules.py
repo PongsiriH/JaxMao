@@ -12,7 +12,9 @@ def compiled_loss_and_grad(method_fn, params, state, X, y, loss_fn, metrics):
     # calculate loss
     loss = loss_fn(y_pred, y)
     return loss, (new_state, metric_values)
-    
+
+loss_and_grad = value_and_grad(compiled_loss_and_grad, argnums=1, has_aux=True)
+
 class InitializeLayersModule(type):
     """
         Help Module class initialize layers without having to explicitly declared.
@@ -29,8 +31,11 @@ class Module:
         self.params = {}
         self.loss = None
         self.optimizer = None
-        self.metrics = None
-        self.summary = '{:<20} {:<20} {:<20}\n'.format('layer', 'output shape', '#\'s params')
+        self.metrics = dict()
+        self.num_params = 0
+        self.summary = '{:<20} {:<20} {:<20} {:<20}\n'.format('layer', 'output shape', '#\'s params', '#\'s states')
+        
+        self.pure_forward = jit(self.pure_forward)
         
     def post_initialization(self):
         self.init_layers()
@@ -82,7 +87,8 @@ class Module:
                 else:
                     x, layer_state = layer(params, x)
                     state = layer_state
-            self.summary += '{:<20} {:<20} {:<20}\n'.format(name, str(x.shape), layer.num_params + layer.num_states)
+            self.summary += '{:<20} {:<20} {:<20} {:<20}\n'.format(name, str(x.shape), layer.count_params(), layer.num_states)
+            self.num_params += layer.num_params
         return x, state
     
     def update_state(self, new_state):
@@ -91,10 +97,10 @@ class Module:
                 layer.state.update(new_state[name])
                 self.state[name] = layer.state
     
-    def set_evaluation_mode(self):
+    def set_training_mode(self):
         for layer in self.layers:
-            if hasattr(layer, 'set_evaluation_mode'):
-                layer.set_evaluation_mode()
+            if hasattr(layer, 'set_training_mode'):
+                layer.set_training_mode()
 
     def set_inference_mode(self):
         for layer in self.layers:
@@ -122,10 +128,16 @@ class Module:
         X, y, lr=0.01, epochs=1, batch_size=32,
         X_val=None, y_val=None
     ):
-        loss_and_grad = value_and_grad(compiled_loss_and_grad, argnums=1, has_aux=True)
         optim_state = None
         num_batch = len(X) // batch_size
-
+        
+        total_tp = 0
+        total_tn = 0
+        total_fp = 0
+        total_fn = 0
+        
+        header_metrics = ' '.join([f"{name: <15}" for name in self.metrics.keys()])
+        print(f"{'epoch': <10}{'avg_loss': <15}{header_metrics}")
         for epoch in range(epochs):
             losses = 0.0
             epoch_metrics = np.zeros(len(self.metrics))
@@ -151,65 +163,24 @@ class Module:
                 self.update_state(new_state)
 
             epoch_metrics /= num_batch
-            msg_metric = ' '.join([f"{name}: {value}" for name, value in zip(self.metrics.keys(), epoch_metrics)])
-            print(f'epoch {epoch}: Loss {losses/num_batch}; {msg_metric}')
+            losses_avg = losses/num_batch
 
-    """    
-    def fit(
-        self,
-        X, y, lr=0.01, epochs=1, batch_size=32,
-        X_val=None, y_val=None
-            ):
-        def aux_loss_fn(
-            method, params, state,
-            X, y, loss_fn, metrics
-                ):
-            # not pure because of model
-            y_pred, new_state = jit(method)(params, X, state)
-            
-            # calculate metrics
-            metric_values = dict()
-            for metric_name, metric in metrics.items():
-                metric_value = metric(y_pred, y)
-                metric_values[metric_name] = metric_value
-                
-            # calculate loss
-            loss = jit(loss_fn.calculate_loss)(y_pred, y)
-            return loss, (new_state, metric_values)
-        
-        loss_and_grad = value_and_grad(aux_loss_fn, argnums=1, has_aux=True)
-        
-        optim_state = None
-        num_batch = len(X) // batch_size 
-        for epoch in range(epochs):
-            losses = 0.0
-            epoch_metrics = {name: 0.0 for name in self.metrics.keys()}  # Initialize metrics for the epoch
+            msg_metric = ' '.join([f"{value:<15.4}" for value in epoch_metrics])
+            msg_val = ' '
+            if X_val is not None and y_val is not None:
+                val_metric = self.eval(X_val, y_val)
+                msg_val = msg_val.join([f'{value:<15.4}' for value in val_metric.values()])
+                msg_val = '\n{:<10} '.format(' ') + msg_val
+            print(f'{epoch:<10} {losses_avg: <15.4f}{msg_metric} {msg_val}\n')
 
-            X, y = shuffle(X, y)
-            for n in range(num_batch):
-                batch_x = X[n*batch_size:(n+1)*batch_size]
-                batch_y = y[n*batch_size:(n+1)*batch_size]
-                (loss, (new_state, batch_metrics)), gradients = loss_and_grad(
-                                                            self.pure_forward, 
-                                                            self.params, 
-                                                            self.state, 
-                                                            batch_x, 
-                                                            batch_y, 
-                                                            self.loss_fn,
-                                                            self.metrics
-                                                                )
-                losses += loss
-                for name, value in batch_metrics.items():
-                    epoch_metrics[name] += value  # Aggregate metric values
-                self.params, optim_state = self.optimizer.step(self.params, gradients, lr, optim_state)
-                self.update_state(new_state)
-            
-            for name in epoch_metrics.keys():
-                epoch_metrics[name] /= num_batch
-            msg_metric = ' '.join([f"{name}: {value}" for name, value in epoch_metrics.items()])
-            print(f'epoch {epoch}: Loss {losses/num_batch}; {msg_metric}')
-"""
 
+    def eval(self, X, y):
+        y_pred, state = self.pure_forward(self.params, X, self.state)
+        metric_values = {'loss': self.loss_fn(y_pred, y)}
+        metric_values.update({name: metric(y_pred, y) for name, metric in self.metrics.items()})
+        return metric_values
+    
     def summarize(self):
-        print(self.summary)
-        return self.summary
+        msg = self.summary + f'total parameters: {self.num_params}'
+        print(msg)
+        return msg
