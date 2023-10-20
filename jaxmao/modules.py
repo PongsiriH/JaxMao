@@ -3,6 +3,16 @@ from jax import random, jit, value_and_grad
 from sklearn.utils import shuffle
 import numpy as np
 
+def compiled_loss_and_grad(method_fn, params, state, X, y, loss_fn, metrics):
+    y_pred, new_state = method_fn(params, X, state)
+    
+    # calculate metrics
+    metric_values = {name: metric(y_pred, y) for name, metric in metrics.items()}
+    
+    # calculate loss
+    loss = loss_fn(y_pred, y)
+    return loss, (new_state, metric_values)
+    
 class InitializeLayersModule(type):
     """
         Help Module class initialize layers without having to explicitly declared.
@@ -80,21 +90,6 @@ class Module:
             if isinstance(layer.state, dict):
                 layer.state.update(new_state[name])
                 self.state[name] = layer.state
-        
-    def compile(
-        self, loss_fn, optimizer, metrics=None
-    ):
-        self.loss_fn = loss_fn
-        self.optimizer = optimizer
-        if metrics:
-            if isinstance(metrics, dict):
-                self.metrics = metrics
-            elif isinstance(metrics, list):
-                self.metrics = {metric.name if metric.name else f'metric_{n}': metric for n, metric in enumerate(self.metrics)}
-            elif isinstance(metrics, Metric):
-                self.metrics = {metrics.name: metrics}
-        else:
-            self.metrics = dict()
     
     def set_evaluation_mode(self):
         for layer in self.layers:
@@ -105,7 +100,61 @@ class Module:
         for layer in self.layers:
             if hasattr(layer, 'set_inference_mode'):
                 layer.set_inference_mode()        
-    
+
+    def compile(
+        self, loss_fn, optimizer, metrics=None
+    ):
+        self.loss_fn = loss_fn
+        self.optimizer = optimizer
+        if metrics is not None:
+            if isinstance(metrics, dict):
+                self.metrics = metrics
+            elif isinstance(metrics, list):
+                self.metrics = {metric.name if hasattr(metric, 'name') else f'metric_{n}': 
+                                metric for n, metric in enumerate(metrics)}
+            elif isinstance(metrics, Metric):
+                self.metrics = {metrics.name: metrics}
+        else:
+            self.metrics = dict()
+
+    def fit(
+        self,
+        X, y, lr=0.01, epochs=1, batch_size=32,
+        X_val=None, y_val=None
+    ):
+        loss_and_grad = value_and_grad(compiled_loss_and_grad, argnums=1, has_aux=True)
+        optim_state = None
+        num_batch = len(X) // batch_size
+
+        for epoch in range(epochs):
+            losses = 0.0
+            epoch_metrics = np.zeros(len(self.metrics))
+
+            X, y = shuffle(X, y)
+            for n in range(num_batch):
+                batch_x = X[n*batch_size:(n+1)*batch_size]
+                batch_y = y[n*batch_size:(n+1)*batch_size]
+
+                (loss, (new_state, batch_metrics)), gradients = loss_and_grad(
+                                                        self.pure_forward, 
+                                                        self.params, 
+                                                        self.state, 
+                                                        batch_x, 
+                                                        batch_y, 
+                                                        self.loss_fn,
+                                                        self.metrics
+                                                            )
+                losses += loss
+                epoch_metrics += np.array(list(batch_metrics.values()))
+
+                self.params, optim_state = self.optimizer.step(self.params, gradients, lr, optim_state)
+                self.update_state(new_state)
+
+            epoch_metrics /= num_batch
+            msg_metric = ' '.join([f"{name}: {value}" for name, value in zip(self.metrics.keys(), epoch_metrics)])
+            print(f'epoch {epoch}: Loss {losses/num_batch}; {msg_metric}')
+
+    """    
     def fit(
         self,
         X, y, lr=0.01, epochs=1, batch_size=32,
@@ -159,6 +208,7 @@ class Module:
                 epoch_metrics[name] /= num_batch
             msg_metric = ' '.join([f"{name}: {value}" for name, value in epoch_metrics.items()])
             print(f'epoch {epoch}: Loss {losses/num_batch}; {msg_metric}')
+"""
 
     def summarize(self):
         print(self.summary)
