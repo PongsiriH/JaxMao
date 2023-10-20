@@ -2,7 +2,12 @@ import jax.numpy as jnp
 from jax import grad, jit
 
 class Loss:
-    @jit
+    def __init__(self):
+        self.calculate_loss = jit(self.calculate_loss)
+
+    def calculate_loss(self, y_pred, y_true):
+        pass
+ 
     def __call__(self, y_pred, y_true):
         return self.calculate_loss(y_pred, y_true)
 
@@ -12,6 +17,4 @@ class MeanSquaredError(Loss):
 
 class CategoricalCrossEntropy(Loss):
     def calculate_loss(self, y_pred, y_true):
-        return -jnp.mean(
-            jnp.sum(y_true*jnp.log(y_pred))
-            )
+        return -jnp.mean(jnp.sum(y_true * jnp.log(y_pred), axis=-1))
