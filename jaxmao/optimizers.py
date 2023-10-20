@@ -9,9 +9,9 @@ class optimizers:
     def __call__(self, params, gradients, lr=0.01):
         return self.step(params, gradients, lr=lr)
         
-class GradientDescent(optimizers):
-    def step(self, params, gradients, lr=0.01):
-        return tree_map(lambda p, g : p-lr*g, params, gradients)
+class GradientDescent:
+    def step(self, params, gradients, lr=0.01, state=None):
+        return tree_map(lambda p, g : p - lr * g, params, gradients), state
     
 class Adam(optimizers):
     def __init__(self, params=None, lr=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8):
