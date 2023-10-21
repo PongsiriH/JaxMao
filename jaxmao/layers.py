@@ -64,17 +64,26 @@ class Layer:
 
     def count_params(self):
         self.num_params = 0
+        self.num_states = 0
         if self.shapes:
             for layer in self.shapes.keys():
                 self.num_params = self.num_params + np.prod(self.shapes[layer])
+        if self.layers:
+            for name in self.layers:
+                self.num_params += self.layers[name].count_params()
         return self.num_params
 
     def set_training_mode(self):
         self.state['training'] = True
-    
+        if self.layers:
+            for name in self.layers:
+                self.layers[name].set_training_mode()
+
     def set_inference_mode(self):
         self.state['training'] = False
-
+        if self.layers:
+            for name in self.layers:
+                self.layers[name].set_inference_mode()
 """
     Denses
 """
@@ -406,29 +415,27 @@ class Dropout(Layer):
     ):
         super().__init__()
         self.rate = drop_rate
-        self.state['drop_rate'] = drop_rate
-        self.state['key'] = key
-        self.state['training'] = True
+        self.state = {
+            'drop_rate': drop_rate, 'key': key, 'training': True
+        }
+        self.forward = vmap(self.forward_train)
 
-    @vmap
-    def forward(self, params, x, state):
+    def forward_train(self, params, x, state):
         keep_rate = 1 - state['drop_rate']
+        key, subkey = jax.random.split(state['key'])
+        mask = jax.random.bernoulli(subkey, keep_rate, x.shape)
+        return x * mask / keep_rate, {'key': key, 'drop_rate': state['drop_rate'], 'training': state['training']}
         
-        def training_mode(_):
-            key, subkey = jax.random.split(state['key'])
-            mask = jax.random.bernoulli(subkey, keep_rate, x.shape)
-            return x * mask / keep_rate, {'key': key, 'drop_rate': state['drop_rate'], 'training': state['training']}
-
-        def evaluation_mode(_):
-            return x, state
-
-        z, new_state = lax.cond(
-                state['training'], 
-                None, training_mode, 
-                None, evaluation_mode
-            )
-        return z, new_state
-
+    def forward_inference(self, params, x, state):
+        return x, state
+    
+    def set_training_mode(self):
+        self.state['training'] = True
+        self.forward = vmap(self.forward_train, in_axes=(None, 0, None))
+    
+    def set_inference_mode(self):
+        self.state['training'] = False
+        self.forward = vmap(self.forward_inference, in_axes=(None, 0, None))
 
 """
     Pooling layers
@@ -439,19 +446,20 @@ class Pooling2D(Layer):
     ):
         # TODO! implement padding
         super().__init__()
-        self.kernel_size = kernel_size
-        self.strides = strides
+        self.kernel_size = kernel_size + (1, )
+        self.strides = strides + (1, )
+        self.init_value = jnp.finfo(self.dtype).min
         self.state['padding_config'] = None
         self.padding = padding
         self.reducing_fn = None
 
 
     def forward(self, params, x, state):
-        padding_config = [(0, 0, 0)] * len(x.shape)  # No padding
+        padding_config = [(0, 0)] * len(x.shape)  # No padding
         
         return lax.reduce_window(
             x,
-            init_value=jnp.finfo(x.dtype).min,
+            init_value=self.init_value,
             computation=self.reducing_fn,
             window_dimensions=self.kernel_size,
             window_strides=self.strides,
@@ -463,7 +471,7 @@ class MaxPooling2D(Pooling2D):
         self, kernel_size=(2, 2), strides=(2, 2), padding='SAME'
     ):
         super().__init__(kernel_size, strides, padding='SAME')
-        self.reducing_fn = jnp.max
+        self.reducing_fn = lax.max
 
 class AveragePooling2D(Layer):
     def __init__(
