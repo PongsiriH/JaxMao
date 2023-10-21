@@ -109,9 +109,9 @@ class SimpleDense(Layer):
         self.use_bias = use_bias
         
         if self.use_bias:
-            self.forward = self.forward_bias
+            self.forward = jax.jit(self.forward_bias)
         else:
-            self.forward = self.forward_no_bias
+            self.forward = jax.jit(self.forward_no_bias)
             
         self.shapes = {
             'weights' : (in_channels, out_channels),
@@ -149,13 +149,22 @@ class Dense(Layer):
                                                bias_initializer=bias_initializer,
                                                use_bias=use_bias
                                                ),
-            'dense/batch_norm'   : BatchNorm(out_channels, momentum=momentum)
         }
+        if batch_norm:
+            self.layers['dense/batch_norm'] : BatchNorm(out_channels, momentum=momentum)
+            self.forward = self.forward_bn
+        else:
+            self.forward = self.forward_no_bn
+            
         self.activation = Activation(act=activation)
-        
-    def forward(self, params, x, state=None):
-        x, state = self.apply(self.params, x, 'dense/simple_dense', self.state)
-        x, state = self.apply(self.params, x, 'dense/batch_norm', self.state)
+    
+    def forward_no_bn(self, params, x, state=None):
+        x, state = self.apply(params, x, 'dense/simple_dense', state)
+        return self.activation(x), state
+    
+    def forward_bn(self, params, x, state=None):
+        x, state = self.apply(params, x, 'dense/simple_dense', state)
+        x, state = self.apply(params, x, 'dense/batch_norm', state)
         return self.activation(x), state
 
 
@@ -442,57 +451,66 @@ class Dropout(Layer):
 """
 class Pooling2D(Layer):
     def __init__(
-        self, kernel_size=(2, 2), strides=(2, 2), padding='SAME'
+        self, kernel_size=(2, 2), strides=(2, 2), padding='SAME', init_value=0.0
     ):
-        # TODO! implement padding
         super().__init__()
         self.kernel_size = kernel_size + (1, )
         self.strides = strides + (1, )
-        self.init_value = jnp.finfo(self.dtype).min
-        self.state['padding_config'] = None
-        self.padding = padding
+        self.init_value = init_value
+        self.padding = padding # TODO! implement padding
+        self.padding_config = [(0, 0)] * 3 # No padding
         self.reducing_fn = None
 
 
-    def forward(self, params, x, state):
-        padding_config = [(0, 0)] * len(x.shape)  # No padding
-        
+    def _pool_forward(self, params, x, state):        
         return lax.reduce_window(
             x,
             init_value=self.init_value,
             computation=self.reducing_fn,
             window_dimensions=self.kernel_size,
             window_strides=self.strides,
-            padding=padding_config
+            padding=self.padding_config
         ), state
-        
+   
+     
 class MaxPooling2D(Pooling2D):
     def __init__(
-        self, kernel_size=(2, 2), strides=(2, 2), padding='SAME'
+        self, kernel_size=(2, 2), strides=(2, 2), padding='SAME', 
+        init_value=jnp.finfo(jnp.float32).min
     ):
-        super().__init__(kernel_size, strides, padding='SAME')
+        super().__init__(kernel_size, strides, padding=padding, init_value=init_value)
         self.reducing_fn = lax.max
+        self.forward = vmap(self._pool_forward, in_axes=(None, 0, None))        
 
-class AveragePooling2D(Layer):
+
+class AveragePooling2D(Pooling2D):
     def __init__(
-        self, kernel_size=(2, 2), strides=(2, 2), padding='SAME'
+        self, kernel_size=(2, 2), strides=(2, 2), padding='SAME', 
+        init_value=0.0
     ):
-        super().__init__(kernel_size, strides, padding='SAME')
-        self.reducing_fn = jnp.mean
-        
-class GlobalMaxPooling2D(Layer):
+        super().__init__(kernel_size, strides, padding=padding, init_value=init_value)
+        self.reducing_fn = lax.add
+        self.kernel_prod = jnp.prod(jnp.array(kernel_size), dtype='float32')
+        self._pool_forward = vmap(self._pool_forward, in_axes=(None, 0, None))        
+
+    def forward(self, params, x, state):
+        summed_feature, state = self._pool_forward(params, x, state)
+        return lax.div(summed_feature, self.kernel_prod), state
+                
+class GlobalMaxPooling2D(Pooling2D):
     def __init__(self):
         super().__init__()
-    
-    @vmap
+        self.forward = vmap(self.forward, in_axes=(None, 0, None))
+
     def forward(self, params, x, state):
         return jnp.max(x, axis=(0, 1)), state
 
-class GlobalAveragePooling2D(Layer):
+
+class GlobalAveragePooling2D(Pooling2D):
     def __init__(self):
         super().__init__()
-    
-    @vmap
+        self.forward = vmap(self.forward, in_axes=(None, 0, None))
+
     def forward(self, params, x, state):
         return jnp.mean(x, axis=(0, 1)), state
    
@@ -508,12 +526,14 @@ class Activation(Layer):
             return act
         
         act = act.lower() if isinstance(act, str) else act
-        if act == 'relu':
+        if act == 'relu' or act is None:
             return ReLU()
+        elif act == 'sigmoid':
+            return Sigmoid()
         elif act == 'softmax':
             return StableSoftmax()
         else:
-            return Linear()
+            raise ValueError(f"Unsupported activation function: {act}")
         
     def __init__(self, **kwargs):
         super().__init__()
@@ -542,6 +562,14 @@ class ReLU(Activation):
         super().__init__()
     def calculate(self, params, x):
         return jnp.maximum(0, x)
+
+class Sigmoid(Activation):
+    def __init__(self, **kwargs):
+        super().__init__()
+        
+    def calculate(self, params, x):
+        return lax.logistic(x)
+
 
 class StableSoftmax(Activation):    
     def __init__(self, **kwargs):
