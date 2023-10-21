@@ -25,9 +25,12 @@ class BinaryCrossEntropy(Loss):
         return -jnp.mean(y_true * jnp.log(y_pred + self.eps) + (1 - y_true) * jnp.log(1 - y_pred + self.eps))
 
 class CategoricalCrossEntropy(Loss):
-    def __init__(self, eps=1e-9):
+    def __init__(self, reduce_fn=jnp.mean, eps=1e-7):
         super().__init__()
         self.eps = eps
         
     def calculate_loss(self, y_pred, y_true):
-        return -jnp.mean(jnp.sum(y_true * jnp.log(y_pred + self.eps), axis=-1))
+        y_pred_clipped = jnp.clip(y_pred, self.eps, 1 - self.eps)
+        return -jnp.mean(
+                y_true * jnp.log(y_pred_clipped)
+            )

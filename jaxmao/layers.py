@@ -2,6 +2,7 @@ import warnings
 
 import jax
 from .initializers import HeNormal
+# from initializers import HeNormal
 import jax.numpy as jnp
 from jax import vmap, lax
 from jax import random
@@ -28,7 +29,7 @@ class Layer:
         self.num_params = 0
         self.num_states = 0
         self.state = dict()
-        self.layers = None
+        self.layers = dict()
         self.summary = '{:<20} {:<20} {:<20} {:<20}\n'.format('layer', 'output shape', '#\'s params', '#\'s states')
         
     def init_params(self, key=None):
@@ -143,6 +144,8 @@ class Dense(Layer):
         use_bias=True,
     ):
         super().__init__()
+        self.activation = Activation(act=activation)
+
         self.layers = {
             'dense/simple_dense' : SimpleDense(in_channels, out_channels, activation='linear',
                                                weights_initializer=weights_initializer,
@@ -156,19 +159,81 @@ class Dense(Layer):
         else:
             self.forward = self.forward_no_bn
             
-        self.activation = Activation(act=activation)
     
-    def forward_no_bn(self, params, x, state=None):
+    def forward_no_bn(self, params, x, state):
         x, state = self.apply(params, x, 'dense/simple_dense', state)
         return self.activation(x), state
     
-    def forward_bn(self, params, x, state=None):
+    def forward_bn(self, params, x, state):
         x, state = self.apply(params, x, 'dense/simple_dense', state)
         x, state = self.apply(params, x, 'dense/batch_norm', state)
         return self.activation(x), state
 
+"""
+    Convolutions
+"""
+class GeneralConv2D(Layer):
+    def __init__(
+        self,
+        kernel_size, 
+        shapes : dict,
+        initializers : dict,
+        feature_group_count,
+        strides=(1, 1),
+        activation='relu',
+        padding='SAME',
+        dilation=(1, 1),
+        use_bias=True, 
+        dtype=jnp.float32
+    ):
+        super().__init__()
+        padding = padding.upper()
+        if not padding in ['SAME', 'SAME_LOWER', 'VALID']:
+            warnings.warn(f"Unsupported padding type: {padding}. Using 'SAME' as default.")
+            padding = 'SAME'
+        self.padding = padding
+        
+        if self.use_bias:
+            self.forward = jax.jit(self.forward_bias)
+        else:
+            self.forward = jax.jit(self.forward_no_bias)
 
-class Conv2D(Layer):
+        self.feature_group_count = feature_group_count
+        self.shapes = shapes
+        self.initializers = initializers
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+        self.strides = strides if isinstance(strides, tuple) else (strides, strides) 
+        self.activation = Activation(activation)
+        self.padding = padding
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        self.use_bias = use_bias
+        self.dtype = dtype
+
+    def forward_no_bias(self, params, x, state=None):
+        x = lax.conv_general_dilated(x, params['weights'], 
+                                        window_strides=self.strides,
+                                        padding=self.padding,
+                                        lhs_dilation=None,
+                                        rhs_dilation=self.dilation,
+                                        dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
+                                        feature_group_count=self.feature_group_count
+                                        ) 
+        return self.activation(x), None
+
+    def forward_bias(self, params, x, state=None):
+        x = lax.conv_general_dilated(x, params['weights'], 
+                                        window_strides=self.strides,
+                                        padding=self.padding,
+                                        lhs_dilation=None,
+                                        rhs_dilation=self.dilation,
+                                        dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
+                                        feature_group_count=self.feature_group_count
+                                        ) 
+        x = lax.add(x, params['biases'][None, None, None, :]) # (batch_size, width, height, out_channels)
+        return self.activation(x), None
+
+
+class SimpleConv2D(GeneralConv2D):
         def __init__(self, 
                     in_channels, 
                     out_channels, 
@@ -182,54 +247,82 @@ class Conv2D(Layer):
                     bias_initializer=HeNormal(),
                     dtype=jnp.float32
             ):
-            super().__init__()
-            self.forward = jax.jit(self.forward)
-            
-            if not padding in ['SAME', 'SAME_LOWER', 'VALID']:
-                warnings.warn(f"Unsupported padding type: {padding}. Using 'SAME' as default.")
-                self.padding = 'SAME'
-            
-            if activation in [None, 'linear']:
-                activation = Linear()
-            elif activation == 'relu':
-                activation = ReLU()
-            self.activation = activation
-            
+            kernel_height, kernel_width = (kernel_size, kernel_size) if isinstance(kernel_size, int) else (kernel_size[0], kernel_size[1])
+            self.shapes = {'weights': (kernel_height, kernel_width, in_channels, out_channels)}
+            self.initializers = {'weights': weights_initializer  }
+            self.use_bias = use_bias
+            if self.use_bias:
+                self.shapes['biases'] = (out_channels,)  
+                self.initializers['biases'] = bias_initializer
+                
+            super().__init__(
+                kernel_size, 
+                self.shapes,
+                self.initializers,
+                feature_group_count=1,
+                strides=strides,
+                activation=activation,
+                padding=padding,
+                dilation=dilation,
+                use_bias=use_bias, 
+                dtype=dtype
+            )
             self.in_channels = in_channels
             self.out_channels = out_channels
-            self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
-            self.strides = strides if isinstance(strides, tuple) else (strides, strides)
-            self.use_bias = use_bias
-            self.padding = padding
-            self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
-            self.dtype = dtype
-            
-            self.shapes = {
-                'biases': (out_channels,),
-                'weights': (
-                    (kernel_size, kernel_size, in_channels, out_channels) if isinstance(kernel_size, int)
-                    else (kernel_size[0], kernel_size[1], in_channels, out_channels)
-                )
-            }
 
-            self.initializers = {
-                'biases': bias_initializer if use_bias else zeros_initializer,
-                'weights': weights_initializer
-            }
+class Conv2D(Layer):
+    def __init__(self, 
+            in_channels, 
+            out_channels, 
+            kernel_size, 
+            strides=(1, 1),
+            activation='relu',
+            padding='SAME',
+            dilation=(1, 1),
+            use_bias=True, 
+            batch_norm=False,
+            batch_norm_momentum=0.5,
+            weights_initializer=HeNormal(),
+            bias_initializer=HeNormal(),
+            dtype=jnp.float32
+    ):
+        super().__init__()
+        self.activation = Activation(act=activation)
+        if batch_norm:
+            self.layers['conv2d/bn'] = BatchNorm2D(out_channels, momentum=batch_norm_momentum)
+            self.forward = self.forward_bn
+            use_bias = False
+        else:
+            self.forward = self.forward_no_bn
+        self.use_bias = use_bias
+        self.layers = {
+            'conv2d/simple_conv2d' : SimpleConv2D(
+                                        in_channels, 
+                                        out_channels, 
+                                        kernel_size, 
+                                        strides=strides,
+                                        activation=activation,
+                                        padding=padding,
+                                        dilation=dilation,
+                                        use_bias=self.use_bias, 
+                                        weights_initializer=weights_initializer,
+                                        bias_initializer=weights_initializer,
+                                        dtype=jnp.float32
+                                    )
+        }
 
-                
-        def forward(self, params, x, state=None):
-            x = lax.conv_general_dilated(x, params['weights'], 
-                                            window_strides=self.strides,
-                                            padding=self.padding,
-                                            lhs_dilation=None,
-                                            rhs_dilation=self.dilation,
-                                            dimension_numbers=('NHWC', 'HWIO', 'NHWC')
-                                            ) 
-            x = lax.add(x, params['biases'][None, None, None, :]) # (batch_size, width, height, out_channels)
-            return self.activation(x), None
+    
+    def forward_no_bn(self, params, x, state):
+        x, state = self.apply(params, x, 'conv2d/simple_conv2d', state)
+        return self.activation(x), state
 
-class DepthwiseConv2D(Layer):
+    def forward_bn(self, params, x, state):
+        x, state = self.apply(params, x, 'conv2d/simple_conv2d', state)
+        x, state = self.apply(params, x, 'conv2d/bn', state)
+        return self.activation(x), state
+
+
+class DepthwiseConv2D(GeneralConv2D):
         def __init__(self, 
                     in_channels, 
                     depth_multiplier=1,
@@ -243,56 +336,30 @@ class DepthwiseConv2D(Layer):
                     bias_initializer=HeNormal(),
                     dtype=jnp.float32
             ):
-            super().__init__()
-            self.forward = jax.jit(self.forward)
-            if not padding in ['SAME', 'SAME_LOWER', 'VALID']:
-                warnings.warn(f"Unsupported padding type: {padding}. Using 'SAME' as default.")
-                self.padding = 'SAME'
-            
-            if activation in [None, 'linear']:
-                activation = Linear()
-            elif activation == 'relu':
-                activation = ReLU()
-            self.activation = activation
-            
             self.in_channels = in_channels
             self.depth_multiplier = depth_multiplier
             self.out_channels = in_channels * depth_multiplier
-            self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
-            self.strides = strides if isinstance(strides, tuple) else (strides, strides)
-            self.use_bias = use_bias
-            self.padding = padding
-            self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
-            self.dtype = dtype
             
-            # Initialize the shapes and initializers dictionaries directly
-            self.shapes = {
-                'biases': (self.out_channels,),
-                'weights': (
-                    (kernel_size, kernel_size, self.depth_multiplier, in_channels) if isinstance(kernel_size, int)
-                    else (kernel_size[0], kernel_size[1], self.depth_multiplier, in_channels)
-                )
-            }
-
-            self.initializers = {
-                'biases': bias_initializer if use_bias else zeros_initializer,
-                'weights': weights_initializer
-            }
-        
-        def forward(self, params, x, state=None):
-            x = lax.conv_general_dilated(x, params['weights'], 
-                                            window_strides=self.strides,
-                                            padding=self.padding,
-                                            lhs_dilation=None,
-                                            rhs_dilation=self.dilation,
-                                            dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
-                                            feature_group_count=self.out_channels
-                                            ) 
-            # Broadcasting the biases across the batch and spatial dimensions.
-            # have out_channels biases.
-            # (batch_size, width, height, out_channels)
-            x = lax.add(x, params['biases'][None, None, None, :]) 
-            return self.activation(x), None
+            kernel_height, kernel_width = (kernel_size, kernel_size) if isinstance(kernel_size, int) else (kernel_size[0], kernel_size[1])
+            self.shapes = {'weights': (kernel_height, kernel_width, self.depth_multiplier, in_channels)}
+            self.initializers = {'weights': weights_initializer}
+            self.use_bias = use_bias
+            if self.use_bias:
+                self.shapes['biases'] = (self.out_channels,)
+                self.initializers['biases'] = bias_initializer
+            
+            super().__init__(
+                kernel_size, 
+                self.shapes,
+                self.initializers,
+                feature_group_count=self.in_channels,
+                strides=strides,
+                activation=activation,
+                padding=padding,
+                dilation=dilation,
+                use_bias=use_bias, 
+                dtype=dtype
+            )
 
 class DepthwiseSeparableConv2D(Layer):
     def __init__(
@@ -339,9 +406,9 @@ class DepthwiseSeparableConv2D(Layer):
 class Flatten(Layer):
     def __init__(self):
         super().__init__()
-
+        
     def forward(self, params, x, state=None):
-        return x.reshape(x.shape[0], -1), None
+        return x.reshape(x.shape[0], -1), state
 
 """
     Batch Normalizations
@@ -519,14 +586,16 @@ class GlobalAveragePooling2D(Pooling2D):
 """
 class Activation(Layer):
     def __new__(cls, act=None):
-        if cls is not Activation:  # Skip for subclasses
-            return super(Activation, cls).__new__(cls)
-        
         if isinstance(act, Activation):
             return act
         
+        if cls is not Activation:  # Skip for subclasses
+            return super(Activation, cls).__new__(cls)    
+        
         act = act.lower() if isinstance(act, str) else act
-        if act == 'relu' or act is None:
+        if act == 'linear' or act is None:
+            return Linear()
+        elif act == 'relu':
             return ReLU()
         elif act == 'sigmoid':
             return Sigmoid()
@@ -535,7 +604,7 @@ class Activation(Layer):
         else:
             raise ValueError(f"Unsupported activation function: {act}")
         
-    def __init__(self, **kwargs):
+    def __init__(self, **kwarg):
         super().__init__()
         self.params = None
         self.num_params = None
@@ -551,20 +620,20 @@ class Activation(Layer):
         return self.calculate(params=None, x=x)
 
 class Linear(Activation):
-    def __init__(self, **kwargs):
+    def __init__(self, act=None, **kwargs):
         super().__init__()
         
     def calculate(self, params, x):
         return x
     
 class ReLU(Activation):
-    def __init__(self, **kwargs):
+    def __init__(self, act=None, **kwargs):
         super().__init__()
     def calculate(self, params, x):
         return jnp.maximum(0, x)
 
 class Sigmoid(Activation):
-    def __init__(self, **kwargs):
+    def __init__(self, act=None, **kwargs):
         super().__init__()
         
     def calculate(self, params, x):
@@ -572,7 +641,7 @@ class Sigmoid(Activation):
 
 
 class StableSoftmax(Activation):    
-    def __init__(self, **kwargs):
+    def __init__(self, act=None, **kwargs):
         super().__init__()
         
     def calculate(self, params, x, axis=-1):

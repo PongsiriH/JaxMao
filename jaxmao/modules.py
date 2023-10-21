@@ -33,7 +33,6 @@ class Module:
         self.optimizer = None
         self.metrics = dict()
         self.num_params = 0
-        self.summary = '{:<20} {:<20} {:<20} {:<20}\n'.format('layer', 'output shape', '#\'s params', '#\'s states')
         
         self.pure_forward = jit(self.pure_forward)
         
@@ -93,19 +92,18 @@ class Module:
     
     def update_state(self, new_state):
         for name, layer in self.layers.items():
-            if isinstance(layer.state, dict):
-                layer.state.update(new_state[name])
-                self.state[name] = layer.state
-    
+            layer.state.update(new_state[name])
+            self.state[name] = layer.state
+
     def set_training_mode(self):
         for layer in self.layers:
             if hasattr(layer, 'set_training_mode'):
                 layer.set_training_mode()
 
     def set_inference_mode(self):
-        for layer in self.layers:
-            if hasattr(layer, 'set_inference_mode'):
-                layer.set_inference_mode()        
+        for name in self.layers:
+            if hasattr(self.layers[name], 'set_inference_mode'):
+                self.layers[name].set_inference_mode()        
 
     def compile(
         self, loss_fn, optimizer, metrics=None
@@ -128,13 +126,7 @@ class Module:
         X, y, lr=0.01, epochs=1, batch_size=32,
         X_val=None, y_val=None
     ):
-        optim_state = None
         num_batch = len(X) // batch_size
-        
-        total_tp = 0
-        total_tn = 0
-        total_fp = 0
-        total_fn = 0
         
         header_metrics = ' '.join([f"{name: <15}" for name in self.metrics.keys()])
         print(f"{'epoch': <10}{'avg_loss': <15}{header_metrics}")
@@ -158,8 +150,8 @@ class Module:
                                                             )
                 losses += loss
                 epoch_metrics += np.array(list(batch_metrics.values()))
-
-                self.params, optim_state = self.optimizer.step(self.params, gradients, lr, optim_state)
+                
+                self.params, self.optimizer.state = self.optimizer.step(self.params, gradients, self.optimizer.state)
                 self.update_state(new_state)
 
             epoch_metrics /= num_batch
@@ -180,7 +172,14 @@ class Module:
         metric_values.update({name: metric(y_pred, y) for name, metric in self.metrics.items()})
         return metric_values
     
-    def summarize(self):
-        msg = self.summary + f'total parameters: {self.num_params}'
+    def summarize(self, input_shape):
+        input_shape = np.array(input_shape)
+        input_shape[0] = 4
+
+        self.num_params = 0
+        self.summary = '{:<20} {:<20} {:<20} {:<20}\n'.format('layer', 'output shape', '#\'s params', '#\'s states')
+        out, state = self.forward(self.params, np.random.normal(0, 1, input_shape), self.state)
+        
+        msg = self.summary + f'\ntotal parameters: {self.num_params}'
         print(msg)
         return msg
