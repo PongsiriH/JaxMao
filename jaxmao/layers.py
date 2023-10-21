@@ -402,28 +402,32 @@ class Dropout(Layer):
     ):
         super().__init__()
         self.rate = drop_rate
-        self.state['rate'] = drop_rate
-        self.state['drop_rate'] = key
+        self.state['drop_rate'] = drop_rate
+        self.state['key'] = key
         self.state['training'] = True
 
+    @vmap
     def forward(self, params, x, state):
-        keep_rate = 1-state['drop_rate']
+        keep_rate = 1 - state['drop_rate']
         
         def training_mode(_):
-            state['key'], subkey = jax.random.split(state['key'])
+            key, subkey = jax.random.split(state['key'])
             mask = jax.random.bernoulli(subkey, keep_rate, x.shape)
-            return x * mask / keep_rate
+            return x * mask / keep_rate, {'key': key, 'drop_rate': state['drop_rate'], 'training': state['training']}
 
-        z = lax.cond(
+        def evaluation_mode(_):
+            return x, state
+
+        z, new_state = lax.cond(
                 state['training'], 
                 None, training_mode, 
-                None, x
-                    )
-        return z, state
+                None, evaluation_mode
+            )
+        return z, new_state
 
 
 """
-    Poolings
+    Pooling layers
 """
 class Pooling2D(Layer):
     def __init__(
@@ -470,7 +474,7 @@ class GlobalMaxPooling2D(Layer):
     
     @vmap
     def forward(self, params, x, state):
-        return jnp.max(x, axis=(0, 1))
+        return jnp.max(x, axis=(0, 1)), state
 
 class GlobalAveragePooling2D(Layer):
     def __init__(self):
@@ -478,7 +482,7 @@ class GlobalAveragePooling2D(Layer):
     
     @vmap
     def forward(self, params, x, state):
-        return jnp.mean(x, axis=(0, 1))
+        return jnp.mean(x, axis=(0, 1)), state
    
 """
     Activation layers/functions
