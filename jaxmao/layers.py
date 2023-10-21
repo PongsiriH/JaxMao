@@ -356,22 +356,21 @@ class BatchNorm(Layer):
             'gamma' : ones_initializer,
             'beta' : zeros_initializer
         }
-        
-    def forward(self, params, x, state):
-        def training_mode(_):
-            batch_mean = jnp.mean(x, axis=self.axis_mean)
-            batch_var = jnp.var(x, axis=self.axis_mean)
-            new_running_mean = state['momentum'] * state['running_mean'] + (1 - state['momentum']) * batch_mean
-            new_running_var = state['momentum'] * state['running_var'] + (1 - state['momentum']) * batch_var
-            return new_running_mean, new_running_var, batch_mean, batch_var
-        def inference_mode(_):
-            return state['running_mean'], state['running_var'], state['running_mean'], state['running_var']
+    
+    def set_training_mode(self):
+        self.state['training'] = True
+        self.forward = self.forward_train
+    
+    def set_inference_mode(self):
+        self.state['training'] = False
+        self.forward = self.forward_inference
 
-        new_running_mean, new_running_var, batch_mean, batch_var = lax.cond(
-                                                                        state['training'], 
-                                                                        None, training_mode, 
-                                                                        None, inference_mode
-                                                                            )
+    def forward_train(self, params, x, state):
+        batch_mean = jnp.mean(x, axis=self.axis_mean)
+        batch_var = jnp.var(x, axis=self.axis_mean)
+        new_running_mean = state['momentum'] * state['running_mean'] + (1 - state['momentum']) * batch_mean
+        new_running_var = state['momentum'] * state['running_var'] + (1 - state['momentum']) * batch_var
+
         normalized_x = (x - batch_mean) / jnp.sqrt(batch_var + self.eps)
         scaled_x = normalized_x * params['gamma'] + params['beta']
         
@@ -383,6 +382,11 @@ class BatchNorm(Layer):
         }
         
         return scaled_x, new_state
+
+    def forward_inference(self, params, x, state):
+        normalized_x = (x - state['running_mean']) / jnp.sqrt(state['running_var'] + self.eps)
+        scaled_x = normalized_x * params['gamma'] + params['beta']
+        return scaled_x, state
 
 class BatchNorm2D(BatchNorm):
     def __init__(
