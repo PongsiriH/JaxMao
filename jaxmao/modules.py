@@ -33,6 +33,7 @@ class Module:
         self.optimizer = None
         self.metrics = dict()
         self.num_params = 0
+        self.training = False
         
         self.pure_forward = jit(self.pure_forward)
         
@@ -75,7 +76,7 @@ class Module:
 
     def apply(self, params, x, name, state):
         return self.forward_with_state(params, x, name, state)
-    
+
     def forward_with_state(self, params, x, name, state):
         if name in self.layers:
             layer = self.layers[name]
@@ -96,14 +97,14 @@ class Module:
             self.state[name] = layer.state
 
     def set_training_mode(self):
-        for layer in self.layers:
-            if hasattr(layer, 'set_training_mode'):
-                layer.set_training_mode()
+        self.training = True
+        for layer in self.layers.values():
+            layer.set_training_mode()
 
     def set_inference_mode(self):
-        for name in self.layers:
-            if hasattr(self.layers[name], 'set_inference_mode'):
-                self.layers[name].set_inference_mode()        
+        self.training = False
+        for layer in self.layers.values():
+            layer.set_inference_mode()        
 
     def compile(
         self, loss_fn, optimizer, metrics=None
@@ -173,6 +174,8 @@ class Module:
         return metric_values
     
     def summarize(self, input_shape):
+        training = self.training
+        self.set_inference_mode()
         input_shape = np.array(input_shape)
         input_shape[0] = 4
 
@@ -182,4 +185,7 @@ class Module:
         
         msg = self.summary + f'\ntotal parameters: {self.num_params}'
         print(msg)
+        
+        if training:
+            self.set_training_mode()
         return msg

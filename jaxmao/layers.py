@@ -17,6 +17,8 @@ def ones_initializer(key, shape, dtype):
 def zeros_initializer(key, shape, dtype):
     return jnp.zeros(shape, dtype)
 
+def zeros_plus_initializer(key, shape, dtype):
+    return jnp.full(shape, 0.01, dtype=dtype)
 """
     Layers
 """
@@ -25,10 +27,10 @@ class Layer:
         self.dtype = dtype
         self.params = dict()
         self.shapes = dict()
-        self.initializers = None
+        self.initializers = dict()
         self.num_params = 0
         self.num_states = 0
-        self.state = dict()
+        self.state = dict({'training': False})
         self.layers = dict()
         self.summary = '{:<20} {:<20} {:<20} {:<20}\n'.format('layer', 'output shape', '#\'s params', '#\'s states')
         
@@ -75,16 +77,24 @@ class Layer:
         return self.num_params
 
     def set_training_mode(self):
+        if hasattr(self, 'training_mode'):
+            self.training_mode()
+        
+        for layer in self.layers.values():
+            if hasattr(layer, 'set_training_mode'):
+                layer.set_training_mode()
         self.state['training'] = True
-        if self.layers:
-            for name in self.layers:
-                self.layers[name].set_training_mode()
+
 
     def set_inference_mode(self):
+        if hasattr(self, 'inference_mode'):
+            self.inference_mode()
+            
+        for layer in self.layers.values():
+            if hasattr(layer, 'set_inference_mode'):
+                layer.set_inference_mode()
         self.state['training'] = False
-        if self.layers:
-            for name in self.layers:
-                self.layers[name].set_inference_mode()
+
 """
     Denses
 """
@@ -95,15 +105,18 @@ class SimpleDense(Layer):
         out_channels,
         activation='relu',
         weights_initializer=HeNormal(),
-        bias_initializer=HeNormal(),
+        bias_initializer=zeros_plus_initializer,
         use_bias=True,
     ):
         super().__init__()
-        if activation is None or activation in ['linear']:
-            activation = Linear()
-        elif activation == 'relu':
-            activation = ReLU()
-        self.activation = activation
+        self.shapes.update({
+            'weights' : (in_channels, out_channels),
+        })
+        self.initializers.update({
+            'weights' : weights_initializer,
+        })
+        
+        self.activation = Activation(activation)
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -111,25 +124,18 @@ class SimpleDense(Layer):
         
         if self.use_bias:
             self.forward = jax.jit(self.forward_bias)
+            self.shapes.update({'biases'  : (out_channels, )})
+            self.initializers.update({'biases': bias_initializer})
         else:
             self.forward = jax.jit(self.forward_no_bias)
-            
-        self.shapes = {
-            'weights' : (in_channels, out_channels),
-            'biases'  : (out_channels, )
-        }
-        self.initializers = {
-            'weights' : weights_initializer,
-            'biases': bias_initializer if self.use_bias else zeros_initializer
-        }
         
-    def forward_bias(self, params, x, state=None):
+    def forward_bias(self, params, x, state):
         z = jnp.dot(x, params['weights']) + params['biases']
-        return self.activation(z), None
+        return self.activation(z), state
 
-    def forward_no_bias(self, params, x, state=None):
+    def forward_no_bias(self, params, x, state):
         z = jnp.dot(x, params['weights'])
-        return self.activation(z), None
+        return self.activation(z), state
     
 class Dense(Layer):
     def __init__(
@@ -138,28 +144,30 @@ class Dense(Layer):
         out_channels,
         activation='relu',
         batch_norm=False,
-        momentum=0.5,
+        momentum=0.99,
         weights_initializer=HeNormal(),
-        bias_initializer=HeNormal(),
+        bias_initializer=zeros_plus_initializer,
         use_bias=True,
     ):
         super().__init__()
         self.activation = Activation(act=activation)
-
-        self.layers = {
+        if batch_norm:
+            self.layers.update({'dense/batch_norm' : BatchNorm(out_channels, momentum=momentum)})
+            self.forward = self.forward_bn
+            use_bias = False
+        else:
+            self.forward = self.forward_no_bn
+        
+        self.use_bias = use_bias
+        self.layers.update({
             'dense/simple_dense' : SimpleDense(in_channels, out_channels, activation='linear',
                                                weights_initializer=weights_initializer,
                                                bias_initializer=bias_initializer,
-                                               use_bias=use_bias
+                                               use_bias=self.use_bias
                                                ),
-        }
-        if batch_norm:
-            self.layers['dense/batch_norm'] : BatchNorm(out_channels, momentum=momentum)
-            self.forward = self.forward_bn
-        else:
-            self.forward = self.forward_no_bn
+        })
+
             
-    
     def forward_no_bn(self, params, x, state):
         x, state = self.apply(params, x, 'dense/simple_dense', state)
         return self.activation(x), state
@@ -209,7 +217,7 @@ class GeneralConv2D(Layer):
         self.use_bias = use_bias
         self.dtype = dtype
 
-    def forward_no_bias(self, params, x, state=None):
+    def forward_no_bias(self, params, x, state):
         x = lax.conv_general_dilated(x, params['weights'], 
                                         window_strides=self.strides,
                                         padding=self.padding,
@@ -218,9 +226,9 @@ class GeneralConv2D(Layer):
                                         dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
                                         feature_group_count=self.feature_group_count
                                         ) 
-        return self.activation(x), None
+        return self.activation(x), state
 
-    def forward_bias(self, params, x, state=None):
+    def forward_bias(self, params, x, state):
         x = lax.conv_general_dilated(x, params['weights'], 
                                         window_strides=self.strides,
                                         padding=self.padding,
@@ -230,7 +238,7 @@ class GeneralConv2D(Layer):
                                         feature_group_count=self.feature_group_count
                                         ) 
         x = lax.add(x, params['biases'][None, None, None, :]) # (batch_size, width, height, out_channels)
-        return self.activation(x), None
+        return self.activation(x), state
 
 
 class SimpleConv2D(GeneralConv2D):
@@ -244,7 +252,7 @@ class SimpleConv2D(GeneralConv2D):
                     dilation=(1, 1),
                     use_bias=True, 
                     weights_initializer=HeNormal(),
-                    bias_initializer=HeNormal(),
+                    bias_initializer=zeros_plus_initializer,
                     dtype=jnp.float32
             ):
             kernel_height, kernel_width = (kernel_size, kernel_size) if isinstance(kernel_size, int) else (kernel_size[0], kernel_size[1])
@@ -281,9 +289,9 @@ class Conv2D(Layer):
             dilation=(1, 1),
             use_bias=True, 
             batch_norm=False,
-            batch_norm_momentum=0.5,
+            batch_norm_momentum=0.99,
             weights_initializer=HeNormal(),
-            bias_initializer=HeNormal(),
+            bias_initializer=zeros_plus_initializer,
             dtype=jnp.float32
     ):
         super().__init__()
@@ -295,21 +303,21 @@ class Conv2D(Layer):
         else:
             self.forward = self.forward_no_bn
         self.use_bias = use_bias
-        self.layers = {
+        self.layers.update({
             'conv2d/simple_conv2d' : SimpleConv2D(
                                         in_channels, 
                                         out_channels, 
                                         kernel_size, 
                                         strides=strides,
-                                        activation=activation,
+                                        activation='linear',
                                         padding=padding,
                                         dilation=dilation,
                                         use_bias=self.use_bias, 
                                         weights_initializer=weights_initializer,
-                                        bias_initializer=weights_initializer,
+                                        bias_initializer=zeros_plus_initializer,
                                         dtype=jnp.float32
                                     )
-        }
+        })
 
     
     def forward_no_bn(self, params, x, state):
@@ -333,7 +341,7 @@ class DepthwiseConv2D(GeneralConv2D):
                     dilation=(1, 1),
                     use_bias=True, 
                     weights_initializer=HeNormal(),
-                    bias_initializer=HeNormal(),
+                    bias_initializer=zeros_plus_initializer,
                     dtype=jnp.float32
             ):
             self.in_channels = in_channels
@@ -373,7 +381,7 @@ class DepthwiseSeparableConv2D(Layer):
             dilation=(1, 1),
             use_bias=True,
             weights_initializer=HeNormal(),
-            bias_initializer=HeNormal(),
+            bias_initializer=zeros_plus_initializer,
             dtype=jnp.float32
                  ):
         super().__init__()
@@ -398,7 +406,7 @@ class DepthwiseSeparableConv2D(Layer):
                                  )
         }
     
-    def forward(self, params, x, state=None):
+    def forward(self, params, x, state):
         x, state = self.apply(params, x, 'depthwise', state)
         x, state = self.apply(params, x, 'pointwise', state)
         return x, state
@@ -407,7 +415,7 @@ class Flatten(Layer):
     def __init__(self):
         super().__init__()
         
-    def forward(self, params, x, state=None):
+    def forward(self, params, x, state):
         return x.reshape(x.shape[0], -1), state
 
 """
@@ -417,9 +425,9 @@ class BatchNorm(Layer):
     def __init__(
         self,
         num_features,
-        momentum = 0.5,
+        momentum = 0.99,
         axis_mean = 0,
-        eps=1e-5
+        eps=1e-3
         ):
         super().__init__()
         self.axis_mean = axis_mean
@@ -442,11 +450,11 @@ class BatchNorm(Layer):
             'beta' : zeros_initializer
         }
     
-    def set_training_mode(self):
+    def training_mode(self):
         self.state['training'] = True
         self.forward = self.forward_train
     
-    def set_inference_mode(self):
+    def inference_mode(self):
         self.state['training'] = False
         self.forward = self.forward_inference
 
@@ -477,7 +485,7 @@ class BatchNorm2D(BatchNorm):
     def __init__(
         self,
         num_features,
-        momentum = 0.5,
+        momentum = 0.99,
         eps=1e-5
         ):
         super().__init__(num_features=num_features, momentum=momentum, axis_mean=(0, 1, 2), eps=eps)
@@ -505,11 +513,11 @@ class Dropout(Layer):
     def forward_inference(self, params, x, state):
         return x, state
     
-    def set_training_mode(self):
+    def training_mode(self):
         self.state['training'] = True
         self.forward = vmap(self.forward_train, in_axes=(None, 0, None))
     
-    def set_inference_mode(self):
+    def inference_mode(self):
         self.state['training'] = False
         self.forward = vmap(self.forward_inference, in_axes=(None, 0, None))
 
@@ -606,14 +614,11 @@ class Activation(Layer):
         
     def __init__(self, **kwarg):
         super().__init__()
-        self.params = None
-        self.num_params = None
-        self.shapes = None
         
     def init_params(self, key):
         pass
     
-    def forward(self, params, x, state=None):
+    def forward(self, params, x, state):
         return self.calculate(params, x), state
     
     def __call__(self, x, state=None):
