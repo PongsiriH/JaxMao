@@ -46,24 +46,78 @@ class Layer:
             for name in self.layers:
                 key, subkey = random.split(key)
                 self.layers[name].init_params(subkey)
-                self.params[name] = self.layers[name].params                
+                self.params[name] = self.layers[name].params          
+                      
+    def forward(self, params, x, state):
+        raise NotImplementedError("The forward method should be overridden by subclass")
     
     def __call__(self, params, x):
-        return self.forward(params, x, self.state)
+        z, new_state = self.forward(params, x, self.state)
+        self.update_state(new_state)
+        return z, new_state
 
-    def apply(self, params, x, name, state=None):
+    def set_training_mode(self):
+        def apply_train(params, x, name, state):
+            return self._apply(params, x, name, state)
+        self.apply = apply_train
+        
+        if hasattr(self, 'training_mode'):
+            self.training_mode()
+        
+        for layer in self.layers.values():
+            if hasattr(layer, 'set_training_mode'):
+                layer.set_training_mode()
+        self.state['training'] = True
+        
+    def set_inference_mode(self):
+        def apply_inference(params, x, name, state):
+            return self._apply(self.params, x, name, state)
+        self.apply = apply_inference
+        
+        if hasattr(self, 'inference_mode'):
+            self.inference_mode()
+     
+        for layer in self.layers.values():
+            if hasattr(layer, 'set_inference_mode'):
+                layer.set_inference_mode()
+        self.state['training'] = False
+        
+    def apply(self, params, x, name, state):
+        raise NotImplementedError("use set_inference_mode or set_training_mode.")
+
+    def _apply(self, params, x, name, state):
+        new_sublayer_state = dict()
         if name in self.layers:
             layer = self.layers[name]
-            if isinstance(params, dict):
-                if name in params:
-                    x, layer_state = layer(params[name], x)
-                    state[name] = layer_state
-                else:
-                    x, layer_state = layer(params, x)
-                    state = layer_state
-            self.summary += '{:<20} {:<20} {:<20} {:<20}\n'.format(name, str(x.shape), layer.count_params(), layer.num_states)
-            self.num_params += layer.num_params
-        return x, state
+            if name in params:
+                z, new_sublayer_state = layer.forward(params[name], x, state[name])
+                state[name].update(new_sublayer_state)
+            else:
+                z, new_sublayer_state = layer.forward(params, x, state)
+                state.update(new_sublayer_state)
+        return z, state
+
+    def get_state(self):
+        for name, layer in self.layers.items():
+            self.state.update({name: layer.state})
+        return self.state
+
+    def update_state(self, new_state):
+        self.state.update(new_state)
+        
+    # def apply(self, params, x, name, state=None):
+    #     if name in self.layers:
+    #         layer = self.layers[name]
+    #         if isinstance(params, dict):
+    #             if name in params:
+    #                 x, layer_state = layer(params[name], x)
+    #                 state[name] = layer_state
+    #             else:
+    #                 x, layer_state = layer(params, x)
+    #                 state = layer_state
+    #         self.summary += '{:<20} {:<20} {:<20} {:<20}\n'.format(name, str(x.shape), layer.count_params(), layer.num_states)
+    #         self.num_params += layer.num_params
+    #     return x, state
 
     def count_params(self):
         self.num_params = 0
@@ -75,25 +129,6 @@ class Layer:
             for name in self.layers:
                 self.num_params += self.layers[name].count_params()
         return self.num_params
-
-    def set_training_mode(self):
-        if hasattr(self, 'training_mode'):
-            self.training_mode()
-        
-        for layer in self.layers.values():
-            if hasattr(layer, 'set_training_mode'):
-                layer.set_training_mode()
-        self.state['training'] = True
-
-
-    def set_inference_mode(self):
-        if hasattr(self, 'inference_mode'):
-            self.inference_mode()
-            
-        for layer in self.layers.values():
-            if hasattr(layer, 'set_inference_mode'):
-                layer.set_inference_mode()
-        self.state['training'] = False
 
 """
     Denses
@@ -166,6 +201,7 @@ class Dense(Layer):
                                                use_bias=self.use_bias
                                                ),
         })
+        self.get_state()
 
             
     def forward_no_bn(self, params, x, state):
@@ -318,6 +354,7 @@ class Conv2D(Layer):
                                         dtype=jnp.float32
                                     )
         })
+        self.get_state()
 
     
     def forward_no_bn(self, params, x, state):
@@ -435,8 +472,8 @@ class BatchNorm(Layer):
         self.num_states = num_features + num_features
         
         self.state = {
-            'running_mean' : jnp.zeros((num_features,)),
-            'running_var' : jnp.ones((num_features,)),
+            'running_mean' : jnp.zeros((num_features, )),
+            'running_var' : jnp.ones((num_features, )),
             'momentum' : momentum,
             'training' : True
         }

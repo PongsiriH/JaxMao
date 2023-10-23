@@ -35,7 +35,7 @@ class Module:
         self.num_params = 0
         self.training = False
         
-        self.pure_forward = jit(self.pure_forward)
+        self.pure_forward = jit(self._pure_forward)
         
     def post_initialization(self):
         self.init_layers()
@@ -64,7 +64,7 @@ class Module:
     def forward(self, params, x, state):
         raise NotImplementedError("The forward method should be overridden by subclass")
 
-    def pure_forward(self, params, x, state):
+    def _pure_forward(self, params, x, state):
         """A pure function for the forward pass, to be used with JAX transformations."""
         out, new_state = self.forward(params, x, state)
         return out, new_state
@@ -76,6 +76,9 @@ class Module:
 
     def apply(self, params, x, name, state):
         return self.forward_with_state(params, x, name, state)
+        # z, new_state = self.layers[name].pure_forward(params, x, state)
+        # self.update_state(new_state)
+        # return z, new_state
 
     def forward_with_state(self, params, x, name, state):
         if name in self.layers:
@@ -83,10 +86,22 @@ class Module:
             if isinstance(params, dict):
                 if name in params:
                     x, layer_state = layer(params[name], x)
-                    state[name] = layer_state
+                    state[name].update(layer_state)
                 else:
                     x, layer_state = layer(params, x)
-                    state = layer_state
+                    state.update(layer_state)
+        return x, state
+
+    def forward_build(self, params, x, name, state):
+        if name in self.layers:
+            layer = self.layers[name]
+            if isinstance(params, dict):
+                if name in params:
+                    x, layer_state = layer(params[name], x)
+                    state[name].update(layer_state)
+                else:
+                    x, layer_state = layer(params, x)
+                    state.update(layer_state)
             self.summary += '{:<20} {:<20} {:<20} {:<20}\n'.format(name, str(x.shape), layer.count_params(), layer.num_states)
             self.num_params += layer.num_params
         return x, state
@@ -99,11 +114,13 @@ class Module:
 
     def set_training_mode(self):
         self.training = True
+        self.pure_forward = jit(self._pure_forward)
         for layer in self.layers.values():
             layer.set_training_mode()
 
     def set_inference_mode(self):
         self.training = False
+        self.pure_forward = jit(self._pure_forward)
         for layer in self.layers.values():
             layer.set_inference_mode()        
 
@@ -177,6 +194,7 @@ class Module:
     def summarize(self, input_shape):
         training = self.training
         self.set_inference_mode()
+        self.apply = self.forward_build
         input_shape = np.array(input_shape)
         input_shape[0] = 4
 
@@ -189,4 +207,5 @@ class Module:
         
         if training:
             self.set_training_mode()
+        self.apply = self.forward_with_state
         return msg
