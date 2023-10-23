@@ -105,7 +105,7 @@ class SimpleDense(Layer):
         out_channels,
         activation='relu',
         weights_initializer=HeNormal(),
-        bias_initializer=zeros_plus_initializer,
+        bias_initializer=zeros_initializer,
         use_bias=True,
     ):
         super().__init__()
@@ -146,7 +146,7 @@ class Dense(Layer):
         batch_norm=False,
         momentum=0.99,
         weights_initializer=HeNormal(),
-        bias_initializer=zeros_plus_initializer,
+        bias_initializer=zeros_initializer,
         use_bias=True,
     ):
         super().__init__()
@@ -252,7 +252,7 @@ class SimpleConv2D(GeneralConv2D):
                     dilation=(1, 1),
                     use_bias=True, 
                     weights_initializer=HeNormal(),
-                    bias_initializer=zeros_plus_initializer,
+                    bias_initializer=zeros_initializer,
                     dtype=jnp.float32
             ):
             kernel_height, kernel_width = (kernel_size, kernel_size) if isinstance(kernel_size, int) else (kernel_size[0], kernel_size[1])
@@ -291,7 +291,7 @@ class Conv2D(Layer):
             batch_norm=False,
             batch_norm_momentum=0.99,
             weights_initializer=HeNormal(),
-            bias_initializer=zeros_plus_initializer,
+            bias_initializer=zeros_initializer,
             dtype=jnp.float32
     ):
         super().__init__()
@@ -314,7 +314,7 @@ class Conv2D(Layer):
                                         dilation=dilation,
                                         use_bias=self.use_bias, 
                                         weights_initializer=weights_initializer,
-                                        bias_initializer=zeros_plus_initializer,
+                                        bias_initializer=zeros_initializer,
                                         dtype=jnp.float32
                                     )
         })
@@ -341,7 +341,7 @@ class DepthwiseConv2D(GeneralConv2D):
                     dilation=(1, 1),
                     use_bias=True, 
                     weights_initializer=HeNormal(),
-                    bias_initializer=zeros_plus_initializer,
+                    bias_initializer=zeros_initializer,
                     dtype=jnp.float32
             ):
             self.in_channels = in_channels
@@ -381,7 +381,7 @@ class DepthwiseSeparableConv2D(Layer):
             dilation=(1, 1),
             use_bias=True,
             weights_initializer=HeNormal(),
-            bias_initializer=zeros_plus_initializer,
+            bias_initializer=zeros_initializer,
             dtype=jnp.float32
                  ):
         super().__init__()
@@ -427,7 +427,7 @@ class BatchNorm(Layer):
         num_features,
         momentum = 0.99,
         axis_mean = 0,
-        eps=1e-3
+        eps=1e-5
         ):
         super().__init__()
         self.axis_mean = axis_mean
@@ -473,7 +473,6 @@ class BatchNorm(Layer):
             'momentum' : state['momentum'],
             'training' : state['training']
         }
-        
         return scaled_x, new_state
 
     def forward_inference(self, params, x, state):

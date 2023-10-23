@@ -31,7 +31,7 @@ class BinaryCrossEntropy(Loss):
 
 
 class CategoricalCrossEntropy(Loss):
-    def __init__(self, reduce_fn=jnp.mean, eps=1e-12):
+    def __init__(self, reduce_fn='mean_over_batch_size', eps=1e-12):
         super().__init__()
         self.eps = eps
         if reduce_fn == 'mean_over_batch_size':

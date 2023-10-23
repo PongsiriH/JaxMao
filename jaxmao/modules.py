@@ -92,9 +92,10 @@ class Module:
         return x, state
     
     def update_state(self, new_state):
+        self.state.update(new_state)
         for name, layer in self.layers.items():
             layer.state.update(new_state[name])
-            self.state[name] = layer.state
+            # self.state[name] = layer.state
 
     def set_training_mode(self):
         self.training = True
