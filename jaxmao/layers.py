@@ -62,7 +62,7 @@ class Layer:
         self.apply = apply_train
         
         if hasattr(self, 'training_mode'):
-            self.training_mode()
+            self = self.training_mode()
         
         for layer in self.layers.values():
             if hasattr(layer, 'set_training_mode'):
@@ -75,7 +75,7 @@ class Layer:
         self.apply = apply_inference
         
         if hasattr(self, 'inference_mode'):
-            self.inference_mode()
+            self = self.inference_mode()
      
         for layer in self.layers.values():
             if hasattr(layer, 'set_inference_mode'):
@@ -489,12 +489,14 @@ class BatchNorm(Layer):
     
     def training_mode(self):
         self.state['training'] = True
-        self.forward = self.forward_train
-    
+        self.forward = jax.jit(self.forward_train)
+        return self
+      
     def inference_mode(self):
         self.state['training'] = False
-        self.forward = self.forward_inference
-
+        self.forward = jax.jit(self.forward_inference)
+        return self
+    
     def forward_train(self, params, x, state):
         batch_mean = jnp.mean(x, axis=self.axis_mean)
         batch_var = jnp.var(x, axis=self.axis_mean)
