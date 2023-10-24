@@ -1,11 +1,20 @@
 import pickle, cv2
+import jax
 
-def _ensure_stateful(inputs):
-    if isinstance(inputs, list):
-        raise TypeError('_ensure_statefule does not accept list.')
-    if not isinstance(inputs, tuple) or len(inputs) != 2:
-        inputs = (inputs, None)
-    return inputs
+def make_loss_function_gradable(
+                method, 
+                loss_fn, 
+                ):
+    """ 
+        Example:
+        funct = make_loss_function_gradable(method=model.forward, loss_fn=loss_fn)
+        loss_and_grad = jax.value_and_grad(funct, argnums=0, has_aux=True)
+    """
+    def _aux_make_loss_function_gradable(params, x_true, y_true, state):
+        y_pred, new_state = method(params, x_true, state)
+        loss = loss_fn(y_pred, y_true)
+        return loss, new_state
+    return _aux_make_loss_function_gradable
 
 """
     pickle utils
@@ -36,4 +45,3 @@ def load_GTSRB(color='rgb'):
         for i in range(len(X_test)):
             X_test[i] = cv2.cvtColor(X_test[i].astype('float32'), cv2.COLOR_HSV2RGB)
     return (X_train, y_train), (X_test, y_test)
-        
