@@ -1,139 +1,49 @@
 import warnings
 
-import jax
-from .initializers import HeNormal
-# from initializers import HeNormal
+from modules import Module
+from utils_struct import (
+                        RecursiveDict,
+                        PostInitialization
+                    )
+
+
+from initializers import *
+
+import numpy as np
 import jax.numpy as jnp
+import jax
 from jax import vmap, lax
 from jax import random
-import numpy as np
 
-"""
-    Helper functions.
-"""
-def ones_initializer(key, shape, dtype):
-    return jnp.ones(shape, dtype)   
-     
-def zeros_initializer(key, shape, dtype):
-    return jnp.zeros(shape, dtype)
-
-def zeros_plus_initializer(key, shape, dtype):
-    return jnp.full(shape, 0.01, dtype=dtype)
 """
     Layers
-"""
-class Layer:
+""" 
+class Layer(Module):
+    is_collectable = True
+    
     def __init__(self, dtype=jnp.float32):
+        super().__init__()
         self.dtype = dtype
-        self.params = dict()
         self.shapes = dict()
         self.initializers = dict()
-        self.num_params = 0
-        self.num_states = 0
-        self.state = dict({'training': False})
-        self.layers = dict()
-        self.summary = '{:<20} {:<20} {:<20} {:<20}\n'.format('layer', 'output shape', '#\'s params', '#\'s states')
-        
-    def init_params(self, key=None):
-        if key is None:
-            key = random.PRNGKey(0)
-        if self.shapes:
-            self.params = dict()
-            for layer in self.shapes.keys():
-                key, subkey = random.split(key)
-                self.params[layer] = self.initializers[layer](subkey, self.shapes[layer], dtype=self.dtype)
-        if self.layers:
-            for name in self.layers:
-                key, subkey = random.split(key)
-                self.layers[name].init_params(subkey)
-                self.params[name] = self.layers[name].params          
-                      
-    def forward(self, params, x, state):
-        raise NotImplementedError("The forward method should be overridden by subclass")
-    
-    def __call__(self, params, x):
-        z, new_state = self.forward(params, x, self.state)
-        self.update_state(new_state)
-        return z, new_state
+        self.state = RecursiveDict()
+            
+    def init_params(self, key):
+        for layer in self.shapes.keys():
+            key, subkey = random.split(key)
+            self.params[layer] = self.initializers[layer](
+                                                    subkey, 
+                                                    self.shapes[layer], 
+                                                    dtype=self.dtype
+                                                        )
+        super().init_params(key=key)
 
-    def set_training_mode(self):
-        def apply_train(params, x, name, state):
-            return self._apply(params, x, name, state)
-        self.apply = apply_train
-        
-        if hasattr(self, 'training_mode'):
-            self = self.training_mode()
-        
-        for layer in self.layers.values():
-            if hasattr(layer, 'set_training_mode'):
-                layer.set_training_mode()
-        self.state['training'] = True
-        
-    def set_inference_mode(self):
-        def apply_inference(params, x, name, state):
-            return self._apply(self.params, x, name, state)
-        self.apply = apply_inference
-        
-        if hasattr(self, 'inference_mode'):
-            self = self.inference_mode()
-     
-        for layer in self.layers.values():
-            if hasattr(layer, 'set_inference_mode'):
-                layer.set_inference_mode()
-        self.state['training'] = False
-        
-    def apply(self, params, x, name, state):
-        raise NotImplementedError("use set_inference_mode or set_training_mode.")
-
-    def _apply(self, params, x, name, state):
-        new_sublayer_state = dict()
-        if name in self.layers:
-            layer = self.layers[name]
-            if name in params:
-                z, new_sublayer_state = layer.forward(params[name], x, state[name])
-                state[name].update(new_sublayer_state)
-            else:
-                z, new_sublayer_state = layer.forward(params, x, state)
-                state.update(new_sublayer_state)
-        return z, state
-
-    def get_state(self):
-        for name, layer in self.layers.items():
-            self.state.update({name: layer.state})
-        return self.state
-
-    def update_state(self, new_state):
-        self.state.update(new_state)
-        
-    # def apply(self, params, x, name, state=None):
-    #     if name in self.layers:
-    #         layer = self.layers[name]
-    #         if isinstance(params, dict):
-    #             if name in params:
-    #                 x, layer_state = layer(params[name], x)
-    #                 state[name] = layer_state
-    #             else:
-    #                 x, layer_state = layer(params, x)
-    #                 state = layer_state
-    #         self.summary += '{:<20} {:<20} {:<20} {:<20}\n'.format(name, str(x.shape), layer.count_params(), layer.num_states)
-    #         self.num_params += layer.num_params
-    #     return x, state
-
-    def count_params(self):
-        self.num_params = 0
-        self.num_states = 0
-        if self.shapes:
-            for layer in self.shapes.keys():
-                self.num_params = self.num_params + np.prod(self.shapes[layer])
-        if self.layers:
-            for name in self.layers:
-                self.num_params += self.layers[name].count_params()
-        return self.num_params
-
+    def switch_mode(self, mode: str):
+        super().switch_mode(mode)
 """
     Denses
 """
-class SimpleDense(Layer):
+class SimpleDense(Layer):    
     def __init__(
         self, 
         in_channels, 
@@ -144,34 +54,30 @@ class SimpleDense(Layer):
         use_bias=True,
     ):
         super().__init__()
-        self.shapes.update({
-            'weights' : (in_channels, out_channels),
-        })
-        self.initializers.update({
-            'weights' : weights_initializer,
-        })
-        
-        self.activation = Activation(activation)
-
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.use_bias = use_bias
+        self.activation = Activation(activation)
+
+        self.shapes.update({'weights' : (in_channels, out_channels)})
+        self.initializers.update({'weights' : weights_initializer,})
         
         if self.use_bias:
-            self.forward = jax.jit(self.forward_bias)
+            self.pure_forward = jax.jit(self._forward_bias)
             self.shapes.update({'biases'  : (out_channels, )})
             self.initializers.update({'biases': bias_initializer})
         else:
-            self.forward = jax.jit(self.forward_no_bias)
+            self.pure_forward = jax.jit(self._forward_no_bias)
         
-    def forward_bias(self, params, x, state):
+    def _forward_bias(self, params, x, state):
         z = jnp.dot(x, params['weights']) + params['biases']
         return self.activation(z), state
 
-    def forward_no_bias(self, params, x, state):
+    def _forward_no_bias(self, params, x, state):
         z = jnp.dot(x, params['weights'])
         return self.activation(z), state
-    
+
+
 class Dense(Layer):
     def __init__(
         self, 
@@ -179,7 +85,7 @@ class Dense(Layer):
         out_channels,
         activation='relu',
         batch_norm=False,
-        momentum=0.99,
+        momentum=0.9,
         weights_initializer=HeNormal(),
         bias_initializer=zeros_initializer,
         use_bias=True,
@@ -187,30 +93,27 @@ class Dense(Layer):
         super().__init__()
         self.activation = Activation(act=activation)
         if batch_norm:
-            self.layers.update({'dense/batch_norm' : BatchNorm(out_channels, momentum=momentum)})
-            self.forward = self.forward_bn
+            self.batch_norm1d = BatchNorm(out_channels, momentum=momentum)
+            self.pure_forward = jax.jit(self.forward_bn)
             use_bias = False
         else:
-            self.forward = self.forward_no_bn
-        
-        self.use_bias = use_bias
-        self.layers.update({
-            'dense/simple_dense' : SimpleDense(in_channels, out_channels, activation='linear',
-                                               weights_initializer=weights_initializer,
-                                               bias_initializer=bias_initializer,
-                                               use_bias=self.use_bias
-                                               ),
-        })
-        self.get_state()
-
+            self.pure_forward = jax.jit(self.forward_no_bn)
             
+        self.simple_dense = SimpleDense(
+                                    in_channels, out_channels, 
+                                    activation='linear',
+                                    weights_initializer=weights_initializer,
+                                    bias_initializer=bias_initializer,
+                                    use_bias=use_bias
+                                        )
+        
     def forward_no_bn(self, params, x, state):
-        x, state = self.apply(params, x, 'dense/simple_dense', state)
+        x, state = self.simple_dense.forward(params['simple_dense'], x, state)
         return self.activation(x), state
     
     def forward_bn(self, params, x, state):
-        x, state = self.apply(params, x, 'dense/simple_dense', state)
-        x, state = self.apply(params, x, 'dense/batch_norm', state)
+        x, state = self.forward(self.simple_dense, params, x, state)
+        x, state = self.forward(self.batch_norm1d, params, x, state)
         return self.activation(x), state
 
 """
@@ -222,7 +125,7 @@ class GeneralConv2D(Layer):
         kernel_size, 
         shapes : dict,
         initializers : dict,
-        feature_group_count,
+        feature_group_count : int,
         strides=(1, 1),
         activation='relu',
         padding='SAME',
@@ -238,9 +141,9 @@ class GeneralConv2D(Layer):
         self.padding = padding
         
         if self.use_bias:
-            self.forward = jax.jit(self.forward_bias)
+            self.pure_forward = jax.jit(self.forward_bias)
         else:
-            self.forward = jax.jit(self.forward_no_bias)
+            self.pure_forward = jax.jit(self.forward_no_bias)
 
         self.feature_group_count = feature_group_count
         self.shapes = shapes
@@ -252,18 +155,7 @@ class GeneralConv2D(Layer):
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.use_bias = use_bias
         self.dtype = dtype
-
-    def forward_no_bias(self, params, x, state):
-        x = lax.conv_general_dilated(x, params['weights'], 
-                                        window_strides=self.strides,
-                                        padding=self.padding,
-                                        lhs_dilation=None,
-                                        rhs_dilation=self.dilation,
-                                        dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
-                                        feature_group_count=self.feature_group_count
-                                        ) 
-        return self.activation(x), state
-
+    
     def forward_bias(self, params, x, state):
         x = lax.conv_general_dilated(x, params['weights'], 
                                         window_strides=self.strides,
@@ -274,6 +166,17 @@ class GeneralConv2D(Layer):
                                         feature_group_count=self.feature_group_count
                                         ) 
         x = lax.add(x, params['biases'][None, None, None, :]) # (batch_size, width, height, out_channels)
+        return self.activation(x), state
+    
+    def forward_no_bias(self, params, x, state):
+        x = lax.conv_general_dilated(x, params['weights'], 
+                                        window_strides=self.strides,
+                                        padding=self.padding,
+                                        lhs_dilation=None,
+                                        rhs_dilation=self.dilation,
+                                        dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
+                                        feature_group_count=self.feature_group_count
+                                        ) 
         return self.activation(x), state
 
 
@@ -291,10 +194,13 @@ class SimpleConv2D(GeneralConv2D):
                     bias_initializer=zeros_initializer,
                     dtype=jnp.float32
             ):
+            self.in_channels = in_channels
+            self.out_channels = out_channels
             kernel_height, kernel_width = (kernel_size, kernel_size) if isinstance(kernel_size, int) else (kernel_size[0], kernel_size[1])
             self.shapes = {'weights': (kernel_height, kernel_width, in_channels, out_channels)}
             self.initializers = {'weights': weights_initializer  }
             self.use_bias = use_bias
+            
             if self.use_bias:
                 self.shapes['biases'] = (out_channels,)  
                 self.initializers['biases'] = bias_initializer
@@ -311,8 +217,7 @@ class SimpleConv2D(GeneralConv2D):
                 use_bias=use_bias, 
                 dtype=dtype
             )
-            self.in_channels = in_channels
-            self.out_channels = out_channels
+
 
 class Conv2D(Layer):
     def __init__(self, 
@@ -333,14 +238,12 @@ class Conv2D(Layer):
         super().__init__()
         self.activation = Activation(act=activation)
         if batch_norm:
-            self.layers['conv2d/bn'] = BatchNorm2D(out_channels, momentum=batch_norm_momentum)
-            self.forward = self.forward_bn
+            self.batch_norm2d = BatchNorm2D(out_channels, momentum=batch_norm_momentum)
+            self.forward = jax.jit(self.forward_bn)
             use_bias = False
         else:
-            self.forward = self.forward_no_bn
-        self.use_bias = use_bias
-        self.layers.update({
-            'conv2d/simple_conv2d' : SimpleConv2D(
+            self.forward = jax.jit(self.forward_no_bn)
+        self.simple_conv2d = SimpleConv2D(
                                         in_channels, 
                                         out_channels, 
                                         kernel_size, 
@@ -348,22 +251,19 @@ class Conv2D(Layer):
                                         activation='linear',
                                         padding=padding,
                                         dilation=dilation,
-                                        use_bias=self.use_bias, 
+                                        use_bias=use_bias, 
                                         weights_initializer=weights_initializer,
-                                        bias_initializer=zeros_initializer,
-                                        dtype=jnp.float32
+                                        bias_initializer=bias_initializer,
+                                        dtype=dtype
                                     )
-        })
-        self.get_state()
-
     
     def forward_no_bn(self, params, x, state):
-        x, state = self.apply(params, x, 'conv2d/simple_conv2d', state)
+        x, state = self.forward(self.simple_conv2d, params, x, state)
         return self.activation(x), state
 
     def forward_bn(self, params, x, state):
-        x, state = self.apply(params, x, 'conv2d/simple_conv2d', state)
-        x, state = self.apply(params, x, 'conv2d/bn', state)
+        x, state = self.forward(self.simple_conv2d, params, x, state)
+        x, state = self.forward(self.batch_norm2d, params, x, state)
         return self.activation(x), state
 
 
@@ -422,8 +322,7 @@ class DepthwiseSeparableConv2D(Layer):
             dtype=jnp.float32
                  ):
         super().__init__()
-        self.layers = {
-            'depthwise' : DepthwiseConv2D(
+        self.depthwise = DepthwiseConv2D(
                                 in_channels, depth_multiplier, 
                                 kernel_size=(3, 3), strides=strides, 
                                 activation=activation, padding=padding,
@@ -431,21 +330,20 @@ class DepthwiseSeparableConv2D(Layer):
                                 weights_initializer=weights_initializer,
                                 bias_initializer=bias_initializer,
                                 dtype=dtype
-                                          ),
-            'pointwise' : Conv2D(
-                            in_channels, out_channels, 
-                            kernel_size=(1, 1), strides=(1, 1),
-                            activation=activation,
-                            dilation=dilation, use_bias=use_bias,
-                            weights_initializer=weights_initializer,
-                            bias_initializer=bias_initializer,
-                            dtype=dtype
+                                          )
+        
+        self.pointwise = Conv2D(
+                                in_channels, out_channels, 
+                                kernel_size=(1, 1), strides=(1, 1),
+                                activation=activation,
+                                dilation=dilation, use_bias=use_bias,
+                                weights_initializer=weights_initializer,
+                                bias_initializer=bias_initializer,
+                                dtype=dtype
                                  )
-        }
-    
     def forward(self, params, x, state):
-        x, state = self.apply(params, x, 'depthwise', state)
-        x, state = self.apply(params, x, 'pointwise', state)
+        x, state = self.forward(self.depthwise, params, x, state)
+        x, state = self.forward(self.pointwise, params, x, state)
         return x, state
 
 class Flatten(Layer):
@@ -462,21 +360,20 @@ class BatchNorm(Layer):
     def __init__(
         self,
         num_features,
-        momentum = 0.99,
-        axis_mean = 0,
-        eps=1e-5
+        momentum=0.9,
+        axis_mean=0,
+        eps=1e-3
         ):
         super().__init__()
         self.axis_mean = axis_mean
         self.eps = eps
         self.num_states = num_features + num_features
         
-        self.state = {
+        self.state = RecursiveDict({
             'running_mean' : jnp.zeros((num_features, )),
             'running_var' : jnp.ones((num_features, )),
             'momentum' : momentum,
-            'training' : True
-        }
+        })
         
         self.shapes = {
             'gamma' : (num_features, ),
@@ -486,20 +383,10 @@ class BatchNorm(Layer):
             'gamma' : ones_initializer,
             'beta' : zeros_initializer
         }
-    
-    def training_mode(self):
-        self.state['training'] = True
-        self.forward = jax.jit(self.forward_train)
-        return self
-      
-    def inference_mode(self):
-        self.state['training'] = False
-        self.forward = jax.jit(self.forward_inference)
-        return self
-    
+        
     def forward_train(self, params, x, state):
-        batch_mean = jnp.mean(x, axis=self.axis_mean)
-        batch_var = jnp.var(x, axis=self.axis_mean)
+        batch_mean = jnp.mean(x, axis=self.axis_mean, keepdims=True)
+        batch_var = jnp.var(x, axis=self.axis_mean, keepdims=True)
         new_running_mean = state['momentum'] * state['running_mean'] + (1 - state['momentum']) * batch_mean
         new_running_var = state['momentum'] * state['running_var'] + (1 - state['momentum']) * batch_var
 
@@ -510,7 +397,6 @@ class BatchNorm(Layer):
             'running_mean': new_running_mean,
             'running_var': new_running_var,
             'momentum' : state['momentum'],
-            'training' : state['training']
         }
         return scaled_x, new_state
 
@@ -519,12 +405,29 @@ class BatchNorm(Layer):
         scaled_x = normalized_x * params['gamma'] + params['beta']
         return scaled_x, state
 
+    def switch_mode(self, mode : str):
+        mode = mode.lower()
+        if mode == 'train':
+            self.pure_forward = jax.jit(self.forward_train)
+        elif mode == 'inference':
+            self.pure_forward = jax.jit(self.forward_inference)
+        super().switch_mode(mode=mode)
+
+class BatchNorm1D(BatchNorm):
+    def __init__(
+        self,
+        num_features,
+        momentum = 0.9,
+        eps=1e-3
+        ):
+        super().__init__(num_features=num_features, momentum=momentum, axis_mean=0, eps=eps)
+        
 class BatchNorm2D(BatchNorm):
     def __init__(
         self,
         num_features,
-        momentum = 0.99,
-        eps=1e-5
+        momentum = 0.9,
+        eps=1e-3
         ):
         super().__init__(num_features=num_features, momentum=momentum, axis_mean=(0, 1, 2), eps=eps)
 
@@ -536,11 +439,9 @@ class Dropout(Layer):
         self, key, drop_rate=0.5
     ):
         super().__init__()
-        self.rate = drop_rate
-        self.state = {
-            'drop_rate': drop_rate, 'key': key, 'training': True
-        }
-        self.forward = vmap(self.forward_train)
+        self.state = RecursiveDict({
+            'drop_rate': drop_rate, 'key': key
+        })
 
     def forward_train(self, params, x, state):
         keep_rate = 1 - state['drop_rate']
@@ -550,14 +451,14 @@ class Dropout(Layer):
         
     def forward_inference(self, params, x, state):
         return x, state
-    
-    def training_mode(self):
-        self.state['training'] = True
-        self.forward = vmap(self.forward_train, in_axes=(None, 0, None))
-    
-    def inference_mode(self):
-        self.state['training'] = False
-        self.forward = vmap(self.forward_inference, in_axes=(None, 0, None))
+
+    def switch_mode(self, mode : str):
+        mode = mode.lower()
+        if mode == 'train':
+            self.pure_forward = vmap(self.forward_train, in_axes=(None, 0, None))
+        elif mode == 'inference':
+            self.pure_forward = vmap(self.forward_inference, in_axes=(None, 0, None))
+        super().switch_mode(mode=mode)
 
 """
     Pooling layers
@@ -573,7 +474,6 @@ class Pooling2D(Layer):
         self.padding = padding # TODO! implement padding
         self.padding_config = [(0, 0)] * 3 # No padding
         self.reducing_fn = None
-
 
     def _pool_forward(self, params, x, state):        
         return lax.reduce_window(
@@ -593,7 +493,7 @@ class MaxPooling2D(Pooling2D):
     ):
         super().__init__(kernel_size, strides, padding=padding, init_value=init_value)
         self.reducing_fn = lax.max
-        self.forward = vmap(self._pool_forward, in_axes=(None, 0, None))        
+        self.pure_forward = vmap(self._pool_forward, in_axes=(None, 0, None))        
 
 
 class AveragePooling2D(Pooling2D):
@@ -604,16 +504,16 @@ class AveragePooling2D(Pooling2D):
         super().__init__(kernel_size, strides, padding=padding, init_value=init_value)
         self.reducing_fn = lax.add
         self.kernel_prod = jnp.prod(jnp.array(kernel_size), dtype='float32')
-        self._pool_forward = vmap(self._pool_forward, in_axes=(None, 0, None))        
+        self.pure_forward = vmap(self._pool_forward, in_axes=(None, 0, None))        
 
-    def forward(self, params, x, state):
-        summed_feature, state = self._pool_forward(params, x, state)
+    def _pool_forward(self, params, x, state):
+        summed_feature, state = super()._pool_forward(params, x, state)
         return lax.div(summed_feature, self.kernel_prod), state
                 
 class GlobalMaxPooling2D(Pooling2D):
     def __init__(self):
         super().__init__()
-        self.forward = vmap(self.forward, in_axes=(None, 0, None))
+        self.pure_forward = vmap(self.forward, in_axes=(None, 0, None))
 
     def forward(self, params, x, state):
         return jnp.max(x, axis=(0, 1)), state
@@ -622,7 +522,7 @@ class GlobalMaxPooling2D(Pooling2D):
 class GlobalAveragePooling2D(Pooling2D):
     def __init__(self):
         super().__init__()
-        self.forward = vmap(self.forward, in_axes=(None, 0, None))
+        self.pure_forward = vmap(self.forward, in_axes=(None, 0, None))
 
     def forward(self, params, x, state):
         return jnp.mean(x, axis=(0, 1)), state
@@ -657,40 +557,47 @@ class Activation(Layer):
         pass
     
     def forward(self, params, x, state):
-        return self.calculate(params, x), state
+        return self.pure_forward(params, x), state
     
     def __call__(self, x, state=None):
-        return self.calculate(params=None, x=x)
+        return self.pure_forward(params=self.params, x=x)
 
 class Linear(Activation):
     def __init__(self, act=None, **kwargs):
         super().__init__()
         
-    def calculate(self, params, x):
+    def pure_forward(self, params, x):
         return x
     
 class ReLU(Activation):
     def __init__(self, act=None, **kwargs):
         super().__init__()
-    def calculate(self, params, x):
+    def pure_forward(self, params, x):
         return jnp.maximum(0, x)
 
 class Sigmoid(Activation):
     def __init__(self, act=None, **kwargs):
         super().__init__()
         
-    def calculate(self, params, x):
+    def pure_forward(self, params, x):
         return lax.logistic(x)
-
 
 class StableSoftmax(Activation):    
     def __init__(self, act=None, **kwargs):
         super().__init__()
         
-    def calculate(self, params, x, axis=-1):
+    def pure_forward(self, params, x, axis=-1):
         logits = x
         max_logits = jnp.max(logits, axis=axis, keepdims=True)
         shifted_logits = logits - max_logits
         exp_shifted_logits = jnp.exp(shifted_logits)
         softmax_probs = exp_shifted_logits / jnp.sum(exp_shifted_logits, axis=axis, keepdims=True)
         return softmax_probs
+    
+# if __name__ == '__main__':
+#     key = random.key(42)
+#     dense1 = Dense(784, 128)
+    
+#     print('before init_params: ', dense1, dense1.params)
+#     dense1.init_params(key)
+#     print('after init_params: ', dense1, dense1.params)

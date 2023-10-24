@@ -1,6 +1,17 @@
 from jax import random
 import jax.numpy as jnp
 
+
+def ones_initializer(key, shape, dtype):
+    return jnp.ones(shape, dtype)   
+     
+def zeros_initializer(key, shape, dtype):
+    return jnp.zeros(shape, dtype)
+
+def zeros_plus_initializer(key, shape, dtype):
+    return jnp.full(shape, 0.01, dtype=dtype)
+
+
 class Initializer:
     pass
 
