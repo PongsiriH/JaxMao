@@ -1,6 +1,6 @@
 import warnings
 
-from modules import Module, Layer
+from modules import Module
 from utils_struct import (
                         RecursiveDict,
                         PostInitialization
@@ -15,7 +15,35 @@ import jax
 from jax import vmap, lax
 from jax import random
 
-class Dense(Layer):    
+"""
+    Layers
+""" 
+class Layer(Module):
+    is_collectable = True
+    
+    def __init__(self, dtype=jnp.float32):
+        super().__init__()
+        self.dtype = dtype
+        self.shapes = dict()
+        self.initializers = dict()
+        self.state = RecursiveDict()
+            
+    def init_params(self, key):
+        for layer in self.shapes.keys():
+            key, subkey = random.split(key)
+            self.params[layer] = self.initializers[layer](
+                                                    subkey, 
+                                                    self.shapes[layer], 
+                                                    dtype=self.dtype
+                                                        )
+        super().init_params(key=key)
+
+    def switch_mode(self, mode: str):
+        super().switch_mode(mode)
+"""
+    Denses
+"""
+class SimpleDense(Layer):    
     def __init__(
         self, 
         in_channels, 
@@ -35,20 +63,63 @@ class Dense(Layer):
         self.initializers.update({'weights' : weights_initializer,})
         
         if self.use_bias:
+            self.pure_forward = jax.jit(self._forward_bias)
             self.shapes.update({'biases'  : (out_channels, )})
             self.initializers.update({'biases': bias_initializer})
+        else:
+            self.pure_forward = jax.jit(self._forward_no_bias)
         
-    def __call__(self, x):
-        x = jnp.dot(x, self.params['weights']) 
-        if self.use_bias:
-            x = x + self.params['biases']
-        return self.activation(x)
-    
-    
-    
+    def _forward_bias(self, params, x, state):
+        z = jnp.dot(x, params['weights']) + params['biases']
+        return self.activation(z), state
 
+    def _forward_no_bias(self, params, x, state):
+        z = jnp.dot(x, params['weights'])
+        return self.activation(z), state
+
+
+class Dense(Layer):
+    def __init__(
+        self, 
+        in_channels, 
+        out_channels,
+        activation='relu',
+        batch_norm=False,
+        momentum=0.9,
+        weights_initializer=HeNormal(),
+        bias_initializer=zeros_initializer,
+        use_bias=True,
+    ):
+        super().__init__()
+        self.activation = Activation(act=activation)
+        if batch_norm:
+            self.batch_norm1d = BatchNorm(out_channels, momentum=momentum)
+            self.pure_forward = jax.jit(self.forward_bn)
+            use_bias = False
+        else:
+            self.pure_forward = jax.jit(self.forward_no_bn)
+            
+        self.simple_dense = SimpleDense(
+                                    in_channels, out_channels, 
+                                    activation='linear',
+                                    weights_initializer=weights_initializer,
+                                    bias_initializer=bias_initializer,
+                                    use_bias=use_bias
+                                        )
+        
+    def forward_no_bn(self, params, x, state):
+        x, state = self.simple_dense.forward(params['simple_dense'], x, state)
+        return self.activation(x), state
+    
+    def forward_bn(self, params, x, state):
+        x, state = self.forward(self.simple_dense, params, x, state)
+        x, state = self.forward(self.batch_norm1d, params, x, state)
+        return self.activation(x), state
+
+"""
+    Convolutions
+"""
 class GeneralConv2D(Layer):
-    """Parent of Conv2D and DepthwiseConv2D"""
     def __init__(
         self,
         kernel_size, 

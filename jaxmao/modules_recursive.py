@@ -1,6 +1,6 @@
 import os
-# os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
-# os.environ['JAX_CHECK_TRACER_LEAKS'] = 'on'
+os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
+os.environ['JAX_CHECK_TRACER_LEAKS'] = 'on'
 
 from typing import Tuple
 from utils_struct import (
@@ -11,16 +11,15 @@ from utils_struct import (
 
 from metrics import Metric
 from jax import random, jit, value_and_grad
-from jax.tree_util import tree_structure, tree_map
 
-# def _update_recursive_dict(lhs, rhs):
-#     for key in rhs.keys():
-#         lhs[key] = RecursiveDict(rhs[key])
-#     return lhs
+def _update_recursive_dict(lhs, rhs):
+    for key in rhs.keys():
+        lhs[key] = RecursiveDict(rhs[key])
+    return lhs
 
-# def _copy_recursive_dict(rhs):
-#     lhs = rhs
-#     return _update_recursive_dict(lhs, rhs)
+def _copy_recursive_dict(rhs):
+    lhs = rhs
+    return _update_recursive_dict(lhs, rhs)
 
 
 # class _ContextManager:
@@ -53,28 +52,18 @@ from jax.tree_util import tree_structure, tree_map
 #         # print('__exit__: id model old params ', _check_dict_ids(self.model.params, self.old_params))
 #         # return self
 
-from jax.tree_util import tree_map
 class _ContextManager:
     def __init__(self, model, new_params):
         self.model = model
         self.old_params = model.params
         self.new_params = new_params
-
-    def __enter__(self):
-        # print("Entering context: ", self.model.params, self.new_params)
-        # print("ID of self.old_params:", id(self.old_params))
-        # old_id = id(self.model.params)
-        self.model.params = self.new_params
-        # new_id = id(self.model.params)
-        # print("Old ID:", old_id, "New ID:", new_id)
-        # print('__enter__: new params id', _check_dict_ids(self.model.params, self.new_params))
-        # print('__enter__: old params id', _check_dict_ids(self.model.params, self.old_params))
-        return self.model
     
+    def __enter__(self):
+        self.model.params = RecursiveDict(self.new_params)
+
     def __exit__(self, type, value, traceback):
-        # print("Exiting context, current self.model.params:", self.model.params)
         self.model.params = self.old_params
-        # print("After exiting context, restored self.model.params:", self.model.params)
+
 
     
 class Module(metaclass=PostInitialization):
@@ -82,13 +71,17 @@ class Module(metaclass=PostInitialization):
 
     def __init__(self):
         self.layers = dict()
-        self.state = dict()
-        self.params = dict()
+        self.state = RecursiveDict()
+        self.params = RecursiveDict()
         
         self.num_params = 0
         self.num_states = 0
 
         self.training = False
+        
+        self.loss = None
+        self.optimizer = None
+        self.metrics = dict()
         
     def post_initialization(self):
         for (attr_name, obj) in self.__dict__.items():  # collect layers and params
@@ -107,160 +100,29 @@ class Module(metaclass=PostInitialization):
         return self.params
     
     def update_params(self, new_params):
-        self.params = new_params
+        for name in self.layers:
+            self.params[name] = new_params[name]
 
     def update_state(self, new_state):
-        self.state = new_state
-        # for name in self.layers:
-        #     self.state[name] = new_state[name]
+        for name in self.layers:
+            self.state[name] = new_state[name]
 
     def __call__(self, x):
         raise NotImplementedError("The forward method should be overridden by subclass. Keep in mind that forward must return tuple(f(x), new_state) be pure (JAX-wise).")
     
     def _context(self, new_params):
-        self._recursive_update_params(self, new_params)
         return _ContextManager(self, new_params)
     
-    def _recursive_update_params(self, module, new_params):
-        # print("Updating params for module:", module)
-        for name, child in module.layers.items():
-            # print("Processing child layer:", name)
-            if isinstance(child, Module):
-                # print("Child {} is a Module. Recursing...".format(name))
-                self._recursive_update_params(child, new_params[name])
-            else:
-                # print("Child {} is not a Module. Updating params...".format(name))
-                module.params[name] = new_params[name]
-            # print("Params after processing {}: {}".format(name, module.params))
-
-    def propagate_params(self, new_params):
-        self.params = new_params
-        for name, child in self.layers.items():
-            if isinstance(child, Module):
-                child.propagate_params(new_params[name])
-                
     def apply(self, new_params, x):
-        # print("Module.apply before context:")
-        # print("self.params ", self.params)
-        # print("ID of self.params", id(self.params))
-        with self._context(new_params) as _model:
-            # print("Module.apply within context:")
-            # print('models same id ', id(self), id(_model))
-            # print("self.params ", self.params)
-            # print("ID of self.params", id(self.params))
-            self.propagate_params(new_params)
-            x = self.__call__(x)
-        # print("Module.apply after context:")
-        # print("self.params ", self.params)
-        # print("ID of self.params", id(self.params))
-        return x
-
-import initializers
-import jax.numpy as jnp
-
-class Layer(Module):
-    is_collectable = True
-    is_layer = True
-    
-    def __init__(self, dtype='float32'):
-        super().__init__()
-        self.dtype = dtype
-        self.shapes = dict()
-        self.initializers = dict()
-        self.state = RecursiveDict()
+        print('apply', self, self.name, self.layers)
+        for name in self.layers.keys():
+            x = self.layers[name].apply(new_params[name], x)
             
-    def init_params(self, key):
-        for layer in self.shapes.keys():
-            key, subkey = random.split(key)
-            self.params[layer] = self.initializers[layer](
-                                                    subkey, 
-                                                    self.shapes[layer], 
-                                                    dtype=self.dtype
-                                                        )
-        super().init_params(key=key)
+        with self._context(new_params):
+            x = self.__call__(x)
+            return x
 
-class ReLU(Layer):
-    def __init__(self):
-        super().__init__()
-    
-    def init_params(self, key):
-        pass
-    
-    def __call__(self, x):
-        return jnp.maximum(0, x)
-    
-class Dense(Layer):    
-    def __init__(
-        self, 
-        in_channels, 
-        out_channels,
-        weights_initializer=initializers.HeNormal(),
-        bias_initializer=initializers.zeros_initializer,
-        use_bias=True,
-    ):
-        super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.use_bias = use_bias
 
-        self.shapes.update({'weights' : (in_channels, out_channels)})
-        self.initializers.update({'weights' : weights_initializer,})
-        
-        if self.use_bias:
-            self.shapes.update({'biases'  : (out_channels, )})
-            self.initializers.update({'biases': bias_initializer})
-        
-    def __call__(self, x):
-        # print('Dense.__call__: params :', self.params)
-        # print('Dense.__call__: weights: ', self.params['weights'])
-        x = jnp.dot(x, self.params['weights']) 
-        if self.use_bias:
-            x = x + self.params['biases']
-        return x
-    
-"""
-if __name__ == '__main__':
-    import numpy as np
-    import jax.numpy as jnp
-    import jax
-    
-    from utils import make_loss_function_gradable
-    from losses import MeanSquaredError
-    from optimizers import GradientDescent
-    
-    num_samples = 20
-    x = np.linspace(0, 1, num_samples).reshape(num_samples, 1).astype('float32')
-    x = x / x.max()
-    y = (lambda x: 3*x)(x).astype('float32')
-
-    dense = Dense(1, 1, 'linear', use_bias=False)
-    dense.init_params(jax.random.key(0))
-    
-    EPOCHS = 100
-    loss_fn = MeanSquaredError()
-    optimizer = GradientDescent(lr=0.1, params=dense.params)
-    
-    def _loss_fn(params, x, y):
-        y_pred = dense.apply(params, x)
-        loss = loss_fn(y_pred, y)
-        return loss
-    loss_and_grad = jax.value_and_grad(_loss_fn, argnums=0, has_aux=False)
-    # loss, gradients = loss_and_grad(dense.params, x, y)
-
-    new_params = tree_map(lambda A: A+200, dense.params)
-    for epoch in range(EPOCHS):
-        loss, gradients = loss_and_grad(new_params, x, y)
-        new_params, optimizer.state = optimizer(dense.params, gradients, optimizer.state)
-        dense.update_params(new_params)
-    
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.plot(x, y, label='actual')
-    plt.plot(x, dense.apply(dense.params, x), label='apply pred')
-    plt.title('after train')
-    plt.legend()
-    plt.waitforbuttonpress()
-"""
 
 if __name__ == '__main__':
     import numpy as np
@@ -272,72 +134,87 @@ if __name__ == '__main__':
     from optimizers import GradientDescent
     
     num_samples = 20
-    x = np.linspace(0, 1, num_samples).reshape(num_samples, 1).astype('float32')
-    x = x / x.max()
+    x = np.linspace(0, 5, num_samples).reshape(num_samples, 1).astype('float32')
     y = (lambda x: 3*np.power(x, 2))(x).astype('float32')
 
+    x = x / x.max()
+    y = y / y.max()
+    from layers import Dense, ReLU
+    
     class Regressor(Module):
         def __init__(self):
             super().__init__()
             self.name = 'regressor'
-            self.dense1 = Dense(1, 5)
-            self.dense2 = Dense(5, 1,)
-            self.relu1 = ReLU()
-            self.relu2 = ReLU()
-            
+            self.dense1 = Dense(1, 16, 'relu')
+            self.dense2 = Dense(16, 1, 'relu')
+        
         def __call__(self, x):
-            x = self.relu1(self.dense1(x))
-            x = self.relu2(self.dense2(x))
+            x = self.dense2(self.dense1(x))
             return x
 
     reg = Regressor()
     reg.init_params(jax.random.key(44))
-    # if isinstance(reg.dense1, Module):
-    #     print('dense1 is Module')
-    # else:
-    #     print('dense1 is NOT Module')
 
-    another_params = tree_map(lambda A: A+200, reg.params)
-    out2 = reg.apply(another_params, x=np.reshape([5, 10], (2, 1)) )
-    print('out2', out2.ravel())
-    print("another_params:", another_params)
-    print('reg.params ', reg.params)
-    # print("Regressor params:", reg.params)
+    print('len(reg.layers): ', len(reg.layers), reg.layers)
+    print('len(reg.dense1.layers): ', len(reg.dense1.layers), reg.dense1.layers)
+    print('len(reg.dense2.layers): ', len(reg.dense2.layers), reg.dense2.layers)
+    
+    reg2 = Regressor()
+    reg2.init_params(jax.random.key(44))
+    # another_params = {'dense1': {'activation': {}, 'weights': jnp.array([[55.5]], dtype='float32'), 'biases': jnp.array([1.0], dtype='float32')}}
+    # print('__main__ reg.params    : ', reg.params)
+    # print('__main__ another_params: ', another_params)
+    
+    print()
+    print('out0', reg(x).ravel())
+    
+    print()
+    out1 = reg.apply(reg.params, x=x)
+    print('out1', out1.ravel())
+
+    # print()
+    # out2 = reg.apply(reg2.params, x=x)
+    # print('out2', out2.ravel())
 
 
-    print('start training part...\n\n')
-    EPOCHS = 100
-    loss_fn = MeanSquaredError()
-    optimizer = GradientDescent(lr=0.01, params=reg.params)
+    # import matplotlib.pyplot as plt
+    # plt.figure()
+    # plt.plot(x, y, label='actual')
+    # plt.plot(x, reg.apply(reg.params, x), label='pred')
+    # plt.title('before train')
+    # plt.legend()
+    # plt.waitforbuttonpress()
     
-    def _loss_fn(params, x, y):
-        y_pred = reg.apply(params, x)
-        loss = loss_fn(y_pred, y)
-        return loss
-    loss_and_grad = jax.value_and_grad(_loss_fn, argnums=0, has_aux=False)
+    # EPOCHS = 10
+    # loss_fn = MeanSquaredError()
+    # optimizer = GradientDescent(lr=0.01, params=reg.params)
     
-    # loss, gradients = loss_and_grad(another_params, x, y)
-    # print('loss, gradients ',loss, gradients)
+    # def _loss_fn(params, x, y):
+    #     y_pred = reg.apply(params, x)
+    #     loss = loss_fn(y_pred, y)
+    #     return loss
+    # loss_and_grad = jax.value_and_grad(_loss_fn, argnums=0, has_aux=False)
     
-    for epoch in range(EPOCHS):
-        loss, gradients = loss_and_grad(reg.params, x, y)
-        reg.params, optimizer.state = optimizer(reg.params, gradients, optimizer.state)
-        # for key in reg.params:
-        #     reg.params[key] = reg.params[key]
-        print(f'e{epoch}, loss: ', loss)
-        print('gradients ', gradients['dense1']['biases'], gradients['dense2']['biases'])
+    # # print('reg.params', reg.params)
+    # loss, gradients = loss_and_grad(reg.params, x, y)
+    
+    # for epoch in range(EPOCHS):
+    #     loss, gradients = loss_and_grad(reg.params, x, y)
+    #     new_params, optimizer.state = optimizer(reg.params, gradients, optimizer.state)
+    #     for key in new_params:
+    #         reg.params[key] = new_params[key]
+    #     print(f'e{epoch}, loss: ', loss)
+    #     print('gradients ', gradients['dense1']['biases'], gradients['dense2']['biases'])
         
-    # print('reg.params after training', reg.params)
-    y_pred = reg.apply(reg.params, x)
-    print('y_pred', y_pred.ravel())
-    
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.plot(x, y, label='actual')
-    plt.plot(x, y_pred, label='pred')
-    plt.title('after train')
-    plt.legend()
-    plt.waitforbuttonpress()
+    # # print('reg.params after training', reg.params)
+    # y_pred = reg.apply(reg.params, x)
+    # print('y_pred', y_pred.ravel())
+    # plt.figure()
+    # plt.plot(x, y, label='actual')
+    # plt.plot(x, y_pred, label='pred')
+    # plt.title('after train')
+    # plt.legend()
+    # plt.waitforbuttonpress()
     
     
     

@@ -1,9 +1,33 @@
 from jax.tree_util import register_pytree_node
 
+# class RecursiveDict(dict):
+#     """
+#         update params and state inplace keeping same id.
+#     """
+#     @staticmethod
+#     def recursive_update(original, new):
+#         for key, value in new.items():
+#             if key in original and isinstance(original[key], dict) and isinstance(value, dict):
+#                 RecursiveDict.recursive_update(original[key], value)
+#             else:
+#                 original[key] = value
+
+#     def __setitem__(self, key, value):
+#         if key in self and isinstance(self[key], dict) and isinstance(value, dict):
+#             self.recursive_update(self[key], value)
+#         else:
+#             super().__setitem__(key, value)
+
 class RecursiveDict(dict):
     """
-        update params and state inplace keeping same id.
+    Update params and state inplace keeping same id.
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for key, value in self.items():
+            if isinstance(value, dict):
+                super().__setitem__(key, RecursiveDict(value))
+                
     @staticmethod
     def recursive_update(original, new):
         for key, value in new.items():

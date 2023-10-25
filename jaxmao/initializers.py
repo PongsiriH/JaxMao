@@ -2,13 +2,13 @@ from jax import random
 import jax.numpy as jnp
 
 
-def ones_initializer(key, shape, dtype):
+def ones_initializer(key, shape, dtype=jnp.float32):
     return jnp.ones(shape, dtype)   
      
-def zeros_initializer(key, shape, dtype):
+def zeros_initializer(key, shape, dtype=jnp.float32):
     return jnp.zeros(shape, dtype)
 
-def zeros_plus_initializer(key, shape, dtype):
+def zeros_plus_initializer(key, shape, dtype=jnp.float32):
     return jnp.full(shape, 0.01, dtype=dtype)
 
 
