@@ -1,13 +1,12 @@
 import warnings
 
-from modules import Module, Layer
-from utils_struct import (
-                        RecursiveDict,
-                        PostInitialization
+from .modules import Module
+from .utils_struct import (
+                        FrozenDict,
                     )
 
 
-from initializers import *
+from .initializers import *
 
 import numpy as np
 import jax.numpy as jnp
@@ -15,12 +14,35 @@ import jax
 from jax import vmap, lax
 from jax import random
 
-class Dense(Layer):    
+
+
+class Layer(Module):
+    is_collectable = True
+    is_layer = True
+    
+    def __init__(self, dtype='float32'):
+        super().__init__()
+        self.dtype = dtype
+        self.shapes = dict()
+        self.initializers = dict()
+        self.state = dict()
+            
+    def init_params(self, key):
+        for layer in self.shapes.keys():
+            key, subkey = random.split(key)
+            self.params[layer] = self.initializers[layer](
+                                                    subkey, 
+                                                    self.shapes[layer], 
+                                                    dtype=self.dtype
+                                                        )
+        self.params = FrozenDict(self.params)
+        super().init_params(key=key)
+    
+class Dense(Layer):
     def __init__(
         self, 
         in_channels, 
         out_channels,
-        activation='relu',
         weights_initializer=HeNormal(),
         bias_initializer=zeros_initializer,
         use_bias=True,
@@ -29,7 +51,6 @@ class Dense(Layer):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.use_bias = use_bias
-        self.activation = Activation(activation)
 
         self.shapes.update({'weights' : (in_channels, out_channels)})
         self.initializers.update({'weights' : weights_initializer,})
@@ -42,10 +63,20 @@ class Dense(Layer):
         x = jnp.dot(x, self.params['weights']) 
         if self.use_bias:
             x = x + self.params['biases']
-        return self.activation(x)
-    
-    
-    
+        return x
+
+if __name__ == '__main__':
+    dense = Dense(5, 5)
+    layer = Layer()
+    module = Module()
+    print()
+    print()
+    print(dense, layer, module)
+    print(type(dense), type(layer), type(module))
+    print(isinstance(dense, Module), isinstance(dense, Layer))
+    print()
+    print()
+
 
 class GeneralConv2D(Layer):
     """Parent of Conv2D and DepthwiseConv2D"""
@@ -295,18 +326,18 @@ class BatchNorm(Layer):
         self,
         num_features,
         momentum=0.9,
-        axis_mean=0,
+        axis=0,
         eps=1e-3
         ):
         super().__init__()
-        self.axis_mean = axis_mean
+        self.axis_mean = axis
         self.eps = eps
         self.num_states = num_features + num_features
         
-        self.state = RecursiveDict({
+        self.momentum = momentum
+        self.state = dict({
             'running_mean' : jnp.zeros((num_features, )),
             'running_var' : jnp.ones((num_features, )),
-            'momentum' : momentum,
         })
         
         self.shapes = {
@@ -317,35 +348,65 @@ class BatchNorm(Layer):
             'gamma' : ones_initializer,
             'beta' : zeros_initializer
         }
+    
+    def __call__(self, x):
+        if self.training:
+            self.batch_mean = jnp.mean(x, axis=self.axis_mean, keepdims=True)
+            self.batch_var = jnp.var(x, axis=self.axis_mean, keepdims=True)
+            
+            x = (x - self.batch_mean) / jnp.sqrt(self.batch_var + self.eps)
+            x = x * self.params['gamma'] + self.params['beta']
+        return x
+    
+    def update_state(self):
+        super().update_state()
+        batch_mean = jax.device_get(self.batch_mean)
+        batch_var = jax.device_get(self.batch_var)
         
-    def forward_train(self, params, x, state):
-        batch_mean = jnp.mean(x, axis=self.axis_mean, keepdims=True)
-        batch_var = jnp.var(x, axis=self.axis_mean, keepdims=True)
-        new_running_mean = state['momentum'] * state['running_mean'] + (1 - state['momentum']) * batch_mean
-        new_running_var = state['momentum'] * state['running_var'] + (1 - state['momentum']) * batch_var
-
-        normalized_x = (x - batch_mean) / jnp.sqrt(batch_var + self.eps)
-        scaled_x = normalized_x * params['gamma'] + params['beta']
+        if isinstance(batch_mean, jax.interpreters.ad.JVPTracer):
+            batch_mean = batch_mean.primal
+        if isinstance(batch_var, jax.interpreters.ad.JVPTracer):
+            batch_var = batch_var.primal
+            
+        if isinstance(self.state['running_mean'], jax.interpreters.ad.JVPTracer):
+            self.state['running_mean'] = self.momentum * self.state['running_mean'].primal + (1 - self.momentum) * batch_mean
+        else:
+            self.state['running_mean'] = self.momentum * self.state['running_mean'] + (1 - self.momentum) * batch_mean
         
-        new_state = {
-            'running_mean': new_running_mean,
-            'running_var': new_running_var,
-            'momentum' : state['momentum'],
-        }
-        return scaled_x, new_state
+        if isinstance(self.state['running_var'], jax.interpreters.ad.JVPTracer):
+            self.state['running_var'] = self.momentum * self.state['running_var'].primal + (1 - self.momentum) * batch_var
+        else:
+            self.state['running_var'] = self.momentum * self.state['running_var'] + (1 - self.momentum) * batch_var
 
-    def forward_inference(self, params, x, state):
-        normalized_x = (x - state['running_mean']) / jnp.sqrt(state['running_var'] + self.eps)
-        scaled_x = normalized_x * params['gamma'] + params['beta']
-        return scaled_x, state
 
-    def switch_mode(self, mode : str):
-        mode = mode.lower()
-        if mode == 'train':
-            self.pure_forward = jax.jit(self.forward_train)
-        elif mode == 'inference':
-            self.pure_forward = jax.jit(self.forward_inference)
-        super().switch_mode(mode=mode)
+        # def forward_train(self, params, x, state):
+    #     batch_mean = jnp.mean(x, axis=self.axis_mean, keepdims=True)
+    #     batch_var = jnp.var(x, axis=self.axis_mean, keepdims=True)
+    #     new_running_mean = state['momentum'] * state['running_mean'] + (1 - state['momentum']) * batch_mean
+    #     new_running_var = state['momentum'] * state['running_var'] + (1 - state['momentum']) * batch_var
+
+    #     normalized_x = (x - batch_mean) / jnp.sqrt(batch_var + self.eps)
+    #     scaled_x = normalized_x * params['gamma'] + params['beta']
+        
+    #     new_state = {
+    #         'running_mean': new_running_mean,
+    #         'running_var': new_running_var,
+    #         'momentum' : state['momentum'],
+    #     }
+    #     return scaled_x, new_state
+
+    # def forward_inference(self, params, x, state):
+    #     normalized_x = (x - state['running_mean']) / jnp.sqrt(state['running_var'] + self.eps)
+    #     scaled_x = normalized_x * params['gamma'] + params['beta']
+    #     return scaled_x, state
+
+    # def switch_mode(self, mode : str):
+    #     mode = mode.lower()
+    #     if mode == 'train':
+    #         self.pure_forward = jax.jit(self.forward_train)
+    #     elif mode == 'inference':
+    #         self.pure_forward = jax.jit(self.forward_inference)
+    #     super().switch_mode(mode=mode)
 
 class BatchNorm1D(BatchNorm):
     def __init__(
@@ -373,7 +434,7 @@ class Dropout(Layer):
         self, key, drop_rate=0.5
     ):
         super().__init__()
-        self.state = RecursiveDict({
+        self.state = dict({
             'drop_rate': drop_rate, 'key': key
         })
 

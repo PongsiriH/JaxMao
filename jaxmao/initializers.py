@@ -8,12 +8,20 @@ def ones_initializer(key, shape, dtype=jnp.float32):
 def zeros_initializer(key, shape, dtype=jnp.float32):
     return jnp.zeros(shape, dtype)
 
-def zeros_plus_initializer(key, shape, dtype=jnp.float32):
-    return jnp.full(shape, 0.01, dtype=dtype)
-
-
 class Initializer:
     pass
+
+class ConstantInitalzer(Initializer):
+    def __init__(self, value=0.01):
+        self.value = value
+    def __call__(
+        self, 
+        key, 
+        shape, 
+        dtype=jnp.float32
+        ):
+        key, subkey = random.split(key)
+        return jnp.full(shape, self.value, dtype=dtype)
 
 class HeNormal(Initializer):
     def __call__(self, 
@@ -46,7 +54,6 @@ class GlorotNormal(Initializer):
             n = n_in + n_out
         else:
             n = (shape[0] + shape[1])
-        print('{:<20} {:<10}'.format(str(shape), n))
         return random.normal(subkey, shape, dtype) * jnp.sqrt(2/n)
     
 class GlorotUniform(Initializer):
