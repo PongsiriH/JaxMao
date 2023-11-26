@@ -441,45 +441,30 @@ class Dropout(Module):
         return inputs * mask / keep_rate
 
 """Poolings: actually, just use flax. it make more sense to take a functional approach."""
-class Pooling2d(Module):
-    def __init__(
-        self, kernel_size, strides, padding, init_value
-    ):
-        super().__init__()
-        self.kernel_size = (1, ) + kernel_size + (1, ) if isinstance(kernel_size, tuple) else (1, kernel_size, kernel_size, 1)
-        self.strides = (1, ) + strides + (1, ) if isinstance(strides, tuple) else (1, strides, strides, 1)
-        self.init_value = init_value
-        self.padding = padding.upper() if isinstance(padding, str) else padding
-        self.reducing_fn = None
-
-    def _pool_forward(self, inputs):        
-        return 
-
 def max_pool_2d(x, window_shape, strides):
     return lax.reduce_window(x, -jnp.inf, lax.max, (1,)+window_shape+(1,), (1,)+strides+(1,), 'VALID')
 
+class Pooling2d(Module):
+    def __init__(self, kernel_size, strides, padding):
+        super().__init__()
+        self.kernel_size = (1, ) + kernel_size + (1, ) if isinstance(kernel_size, tuple) else (1, kernel_size, kernel_size, 1)
+        self.strides = (1, ) + strides + (1, ) if isinstance(strides, tuple) else (1, strides, strides, 1)
+        self.padding = padding.upper() if isinstance(padding, str) else padding
+
 class MaxPooling2d(Pooling2d):
-    def __init__(
-        self, kernel_size=(2, 2), strides=(2, 2), padding='SAME', 
-        init_value=-jnp.inf
-    ):
-        super().__init__(kernel_size, strides, padding=padding, init_value=init_value)
-        self.reducing_fn = lax.max
+    def __init__(self, kernel_size=(2, 2), strides=(2, 2), padding='SAME'):
+        super().__init__(kernel_size, strides, padding=padding)
     
     def call(self, inputs):
-        return lax.reduce_window(inputs, self.init_value, self.reducing_fn, self.kernel_size, self.strides, self.padding)
+        return lax.reduce_window(inputs, -jnp.inf, lax.max, self.kernel_size, self.strides, self.padding)
 
 class AveragePooling2d(Pooling2d):
-    def __init__(
-        self, kernel_size=(2, 2), strides=(2, 2), padding='SAME', 
-        init_value=0.0
-    ):
-        super().__init__(kernel_size, strides, padding=padding, init_value=init_value)
-        self.reducing_fn = lax.add
+    def __init__(self, kernel_size=(2, 2), strides=(2, 2), padding='SAME'):
+        super().__init__(kernel_size, strides, padding=padding)
         self.kernel_prod = jnp.prod(jnp.array(kernel_size), dtype='float32')
 
     def call(self, inputs):
-        summed_feature = self._pool_forward(inputs)
+        summed_feature = lax.reduce_window(inputs, 0.0, lax.add, (1,)+self.window_shape+(1,), (1,)+self.strides+(1,), self.padding)
         return lax.div(summed_feature, self.kernel_prod)
 
 class GlobalMaxPooling2d(Module):
@@ -494,7 +479,7 @@ class GlobalAveragePooling2d(Module):
         super().__init__()
 
     def call(self, inputs):
-        return jnp.mean(inputs, axis=(1, 2), keepdims=False)
+        return jnp.mean(inputs, axis=(1, 2))
 
 if __name__ == '__main__':
     pass
