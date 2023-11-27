@@ -8,7 +8,7 @@ def mean_over_batch_size(negative_log_likelihood):
 
 class Loss:
     def __init__(self):
-        self.calculate_loss = jit(self.calculate_loss)
+        pass
 
     def calculate_loss(self, y_pred, y_true):
         pass

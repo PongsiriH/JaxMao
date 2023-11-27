@@ -142,44 +142,72 @@ class Variable:
         shape, initializer, regularizer = metadata
         return Variable(shape, initializer, regularizer, data[0])
 
-# if __name__ == '__main__':
-#     shape = [2, 3]
-#     initializer = jax.nn.initializers.constant(5)
-#     var = Variable(shape, initializer)
-#     var.init(jax.random.key(seed=42))
-#     var_flatten, var_def = tree_flatten(var)
-#     print('var:', var)
-#     print('flatten var:\n', var_flatten)
-#     print('flatten var_def:\n', var_def)
-#     print('unflatten var:\n', tree_unflatten(var_def, var_flatten).value)
+
+
+class LightModule:
+    """make copy of a module with only neccesary parts for forward and backward pass"""
+    def __init__(self, __call__, submodules, taken_names_, params_, states_):
+        self.call = __call__
+        if len(submodules) == 0:
+            self.submodules = dict()
+        else:
+            self.submodules = {name: LightModule(submodules[name].__call__, submodules[name].submodules, submodules[name].taken_names_, submodules[name].params_, submodules[name].states_) for name in submodules.keys()}
+        self.taken_names_ = taken_names_
+        self.params_ = params_
+        self.states_ = states_
+
+    def __call__(self, inputs):
+        return self.call(inputs)
     
-#     vars = VariablesDict({
-#         'weights' : Variable([2, 3], initializer=initializer),
-#         'bias': Variable([2,], initializer=initializer)
-#     })
+    def get_reg_value(self, name):
+        if name not in list(self.params_.keys()):
+            raise ValueError(f"Name {name} does not exist.")
+        return self.params_.get_reg_value(name)
     
-#     vars_flatten, vars_def = tree_flatten(vars)
-#     vars_unflatten = tree_unflatten(vars_def, vars_flatten)
-#     print('vars: ', vars)
-#     print('vars: ', vars_flatten)
-#     print('vars: ', vars_def)
-#     print('vars: ', type(vars_unflatten))
-    
-if __name__ == '__main__':
-    class Hello:
-        def __init__(self):
-            self.vardict = VariablesDict()
-            self.vardict.add('weights', Variable((5,2), jax.nn.celu))
-            self.vardict.set_value('weights', 5)
-            # print(self.vardict.get_value('weights'))
+    def param(self, name):
+        if name not in self.taken_names_:
+            raise ValueError(f"Name {name} does not exist.")
+        return self.params_.get_value(name)
+
+    def state(self, name):
+        if name not in self.taken_names_:
+            raise ValueError(f"Name {name} does not exist.")
+        return self.states_.get_value(name)
+
+class SummaryModule:
+    """make copy of a module with only neccesary parts for forward and backward pass"""
+    def __init__(self, __call__, submodules, taken_names_, params_, states_):
+        self.call = __call__
+        if len(submodules) == 0:
+            self.submodules = dict()
+        else:
+            self.submodules = {name: SummaryModule(submodules[name].__call__, submodules[name].submodules, submodules[name].taken_names_, submodules[name].params_, submodules[name].states_) for name in submodules.keys()}
+        self.taken_names_ = taken_names_
+        self.params_ = params_
+        self.states_ = states_
+        
+        for name in self.params_.keys():
+            self.params_[name]._value = jax.numpy.zeros(self.params_[name].shape)
+
+        for name in self.states_.keys():
+            self.states_[name]._value = jax.numpy.zeros(self.states_[name].shape)
             
-    class Bye:
-        def __init__(self):
-            self.vardict = VariablesDict()
-            self.vardict.add('weights', Variable((10,2), jax.nn.celu))
-            self.vardict.set_value('weights', 5)
+    def __call__(self, inputs):
+        z = self.call(inputs)
+        shape = z.shape
+        return jax.numpy.zeros_like(z)
     
-    hello = Hello()
-    bye = Bye()
-    print(hello.vardict)
+    def get_reg_value(self, name):
+        if name not in list(self.params_.keys()):
+            raise ValueError(f"Name {name} does not exist.")
+        return self.params_.get_reg_value(name)
     
+    def param(self, name):
+        if name not in self.taken_names_:
+            raise ValueError(f"Name {name} does not exist.")
+        return self.params_.get_value(name)
+
+    def state(self, name):
+        if name not in self.taken_names_:
+            raise ValueError(f"Name {name} does not exist.")
+        return self.states_.get_value(name)

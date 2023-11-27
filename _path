@@ -1,3 +1,2 @@
-/home/jaxmao/jaxmaov2/
-
-export PYTHONPATH="/home/jaxmao/jaxmaov2/:$PYTHONPATH"
+/home/jaxmao/jaxmaov2_/JaxMao/
+export PYTHONPATH="/home/jaxmao/jaxmaov2_/JaxMao/:$PYTHONPATH"

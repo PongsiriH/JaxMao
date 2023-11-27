@@ -3,12 +3,16 @@ import jax.numpy as jnp
 from jax import lax
 import jax
 from jax.tree_util import tree_flatten, tree_unflatten, tree_flatten_with_path
-import jaxmaov2.initializers as init
-from jaxmaov2.utils_struct import (PostInitialization,
-                                   VariablesDict, Variable,
-                                   )
-import copy
+import jaxmao.initializers as init
+from jaxmao.utils_struct import (PostInitialization, VariablesDict, Variable, LightModule)
+from jaxmao.module_utils import (
+                                 _get_parameters, _get_states, _get_parameters_and_states, _get_states_and_regularizes, _get,
+                                _update_parameters, _update,
+                                _init, _init_zero,
+                                module_id
+                                )
 
+import copy
 import warnings
 
 class PureContext:
@@ -26,133 +30,41 @@ class PureContext:
 class Bind:
     def __init__(self, module, params, states, trainable=False):
         self.module = copy.deepcopy(module)
-        self.params = params
-        self.states = states
+        self.params_ = params
+        self.states_ = states
         self.trainable = trainable
 
     def __enter__(self):
         self.module.set_trainable(self.trainable)
-        _update(self.module, self.params, self.states)
+        _update(self.module, self.params_, self.states_)
         return self
     
     def __exit__(self, *args, **kwargs):
         del self.module
-        del self.params
-        del self.states
+        del self.params_
+        del self.states_
         del self
 
-def _get_parameters(module):
-    parameters = dict()
-    if len(module.submodules) == 0:
-        return module.params_.get_value(as_dict=True)
-    for name in module.submodules:
-        parameters[name] = _get_parameters(module.submodules[name])
-    return parameters
-
-def _get_states(module):
-    states = dict()
-    if len(module.submodules) == 0:
-        return module.states_.get_value(as_dict=True)
-    for name in module.submodules:
-        states[name] = _get_states(module.submodules[name])
-    return states
-
-def _get_parameters_and_states(module):
-    """more efficient  _get_parameters + _get_states"""
-    parameters = dict()
-    states = dict()
-    if len(module.submodules) == 0:
-        return module.params_.get_value(as_dict=True), module.states_.get_value(as_dict=True)
-    for name in module.submodules:
-        parameters[name], states[name] = _get_parameters_and_states(module.submodules[name])
-    return parameters, states
-
-def _get_states_and_regularizes(module):
-    """more efficient _get_states + regularizes"""
-    states = dict()
-    regularizes = 0.0
-    if len(module.submodules) == 0:
-        return module.states_.get_value(as_dict=True), module.params_.get_reg_value()
-    for name in module.submodules:
-        states[name], reg = _get_states_and_regularizes(module.submodules[name])
-        regularizes += reg
-    return states, regularizes
-
-def _get(module):
-    """more efficient  _get_parameters + _get_states + regularizes"""
-    parameters = dict()
-    states = dict()
-    regularizes = 0.0
-    if len(module.submodules) == 0:
-        return module.params_.get_value(as_dict=True), module.states_.get_value(as_dict=True), module.params_.get_reg_value()
-    for name in module.submodules:
-        parameters[name], states[name], regularizes = _get(module.submodules[name])
-    return parameters, states, regularizes
-
-def _update_parameters(module, params):
-    if len(module.submodules) == 0:
-        for key, param in params.items():
-            module.params_.set_value(key, param)
+class Summary:
+    def __init__(self, module):
+        self.module = copy.deepcopy(module)
+        _init_zero(self.module)
+        self.params_, self.states_ = _get_parameters_and_states(self.module)
         
-    for name, submodule in module.submodules.items():
-        _update_parameters(submodule, params[name])
-        
-def _update(module, params, states):
-    if len(module.submodules) == 0:
-        for name, param in params.items():
-            module.params_.set_value(name, param)
-            
-        for name, state in states.items():
-            module.states_.set_value(name, state)
-        
-    for name, submodule in module.submodules.items():
-        _update(submodule, params[name], states[name])   
+    def __enter__(self):
+        self.module.set_trainable(False)
+        _update(self.module, self.params_, self.states_)
+        return self
     
-def _init(module, key):
-    for name in module.params_():
-        key, subkey = jax.random.split(key)
-        shape, initializer = module.params_.get_meta(name)
-        module.params_.set_value(name, initializer(subkey, shape, 'float32'))
+    def summary(self, input_shape):
+        x = jnp.zeros(input_shape)
+        self.module(x)
         
-    for name in module.states_():
-        key, subkey = jax.random.split(key)
-        shape, initializer = module.states_.get_meta(name)
-        module.states_.set_value(name, initializer(subkey, shape, 'float32'))
+    def __exit__(self, *args, **kwargs):
+        del self.module
+        del self.params_
+        del self.states_
         
-    for name, submodule in module.submodules.items():
-        key, subkey = jax.random.split(key)
-        _init(submodule, subkey)
-
-class LightModule:
-    """make copy of a module with only neccesary parts for forward and backward pass"""
-    def __init__(self, __call__, submodules, taken_names_, params_, states_):
-        self.call = __call__
-        if len(submodules) == 0:
-            self.submodules = dict()
-        else:
-            self.submodules = {name: LightModule(submodules[name].__call__, submodules[name].submodules, submodules[name].taken_names_, submodules[name].params_, submodules[name].states_) for name in submodules.keys()}
-        self.taken_names_ = taken_names_
-        self.params_ = params_
-        self.states_ = states_
-
-    def __call__(self, inputs):
-        return self.call(inputs)
-    
-    def get_reg_value(self, name):
-        if name not in list(self.params_.keys()):
-            raise ValueError(f"Name {name} does not exist.")
-        return self.params_.get_reg_value(name)
-    
-    def param(self, name):
-        if name not in self.taken_names_:
-            raise ValueError(f"Name {name} does not exist.")
-        return self.params_.get_value(name)
-
-    def state(self, name):
-        if name not in self.taken_names_:
-            raise ValueError(f"Name {name} does not exist.")
-        return self.states_.get_value(name)
-    
 class Module(metaclass=PostInitialization):
     is_collectable = True
     
@@ -163,17 +75,17 @@ class Module(metaclass=PostInitialization):
         self.states_ = VariablesDict()
         self.trainable = True
         
+        self._id = module_id()
         self.num_submodules = 0
         self.num_params = 0
         self.num_states = 0
     
     def _post_init(self):
         for (attr_name, obj) in self.__dict__.items():
-            if (hasattr(obj, 'is_collectable')
-                and obj.is_collectable
-                ):
+            if (hasattr(obj, 'is_collectable') and obj.is_collectable):
                 self.submodules[attr_name] = obj
                 obj.name = attr_name
+                
         self.num_submodules = len(self.submodules)
     
     def __call__(self, inputs):
@@ -248,21 +160,30 @@ class Module(metaclass=PostInitialization):
 
 
 class Sequential(Module):
-    def __init__(self, modules: list):
+    def __init__(self, modules: list=None):
         super().__init__()
         if modules is None:
-            self.modules = []
+            modules = []
         else:
-            if not all(isinstance(module, Module) for module in modules):
-                raise ValueError("All elements in 'modules' must be instances of 'Module'")
-            self.modules = list(modules)
-        self.modules = modules
+            # if not all(isinstance(module, Module) for module in modules):
+            #     raise ValueError("All elements in 'modules' must be instances of 'Module'")
+            modules = list(modules)
+        self.submodules = {}
+        [self.add(module) for module in modules]        
+    
+    # def _post_init(self):
+    #     super()._post_init()
+    #     print('post init self.modules', self.modules)
+    #     self.submodules = {name: self.modules[name] for name in self.modules}
     
     def call(self, x):
-        for module in self.modules:
-            x = module(x)
+        for name in self.submodules:
+            x = self.submodules[name](x)
         return x
 
+    def add(self, module):
+        self.submodules[module._id] = module
+    
 
 class Dense(Module):
     def __init__(
@@ -480,6 +401,14 @@ class GlobalAveragePooling2d(Module):
 
     def call(self, inputs):
         return jnp.mean(inputs, axis=(1, 2))
+
+
+class LeakyReLU(Module):
+    def __init__(self, alpha):
+        self.alpha = alpha
+    
+    def call(self, inputs):
+        return jax.nn.leaky_relu(inputs, self.alpha)
 
 if __name__ == '__main__':
     pass
