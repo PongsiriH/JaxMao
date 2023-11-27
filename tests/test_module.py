@@ -4,7 +4,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = ''
 import numpy as np
 import random, gc, time
 
-from jaxmaov2.modules import Dense, Module, BatchNorm1d
+from jaxmao.modules import Dense, Module, BatchNorm1d
 import jax
 
 import tensorflow as tf
@@ -12,7 +12,7 @@ from tensorflow import keras
 tf.keras.backend.set_floatx('float32')
 
 eps = 1e-6
-from jaxmaov2 import optimizers
+from jaxmao import optimizers
 
 
 # JaxMao model
@@ -84,7 +84,7 @@ class TestModule:
         keras_model.build(input_shape=(None, in_channels))
         keras_model.set_weights([params['dense']['kernel'], params['dense']['bias']])
         
-        jaxmao_prediction, states = jaxmao_model.apply(sample_data, params, states)
+        jaxmao_prediction, states, _ = jaxmao_model.apply(sample_data, params, states)
         keras_prediction = keras_model(sample_data)
 
         assert jaxmao_prediction.shape == keras_prediction.shape
@@ -115,7 +115,7 @@ class TestModule:
         keras_model.layers[0].set_weights([params['dense1']['kernel'], params['dense1']['bias']])
         keras_model.layers[1].set_weights([params['dense2']['kernel'], params['dense2']['bias']])
         
-        jaxmao_prediction, states = jaxmao_model.apply(sample_data, params, states)
+        jaxmao_prediction, states, _ = jaxmao_model.apply(sample_data, params, states)
         keras_prediction = keras_model(sample_data)
 
         assert jaxmao_prediction.shape == keras_prediction.shape
@@ -178,7 +178,7 @@ class TestModule:
         keras_model.layers[1].excite.set_weights([params['dense2']['excite']['kernel'], params['dense2']['excite']['bias']])
 
         
-        jaxmao_prediction, states = jaxmao_model.apply(sample_data, params, states)
+        jaxmao_prediction, states, _ = jaxmao_model.apply(sample_data, params, states)
         keras_prediction = keras_model(sample_data)
 
         assert jaxmao_prediction.shape == keras_prediction.shape
@@ -213,7 +213,7 @@ class TestNestedDenseModules:
 
         self.jaxmao_model.set_trainable(True)
         for num_loop in range(100):
-            jaxmao_prediction, self.states = self.jaxmao_model.apply(sample_data, self.params, self.states)
+            jaxmao_prediction, self.states, _ = self.jaxmao_model.apply(sample_data, self.params, self.states)
             keras_prediction = self.keras_model(sample_data, training=True)
 
             assert jaxmao_prediction.shape == keras_prediction.shape
@@ -242,7 +242,7 @@ class TestNestedDenseModules:
         for num_loop in range(100):
             trainable_status = np.random.choice([True, False])
             self.jaxmao_model.set_trainable(trainable_status)
-            jaxmao_prediction, self.states = self.jaxmao_model.apply(sample_data, self.params, self.states)
+            jaxmao_prediction, self.states, _ = self.jaxmao_model.apply(sample_data, self.params, self.states)
             keras_prediction = self.keras_model(sample_data, training=trainable_status)
 
             assert jaxmao_prediction.shape == keras_prediction.shape
@@ -283,7 +283,7 @@ class TestNestedDenseModules:
 
         def jaxmao_gradient_descet_step(input_data, target_data, params, states, optimizer_state):
             def loss_fn(input_data, target_data, params, states):
-                predictions, states = self.jaxmao_model.apply(input_data, params, states)
+                predictions, states, _= self.jaxmao_model.apply(input_data, params, states)
                 return jax.numpy.mean(jax.numpy.square(predictions - target_data)), states
             (loss, states), gradients = jax.value_and_grad(loss_fn, argnums=2, has_aux=True)(input_data, target_data, params, states)
             params, optimizer_state = optimizer(params, gradients, optimizer_state)
@@ -304,7 +304,7 @@ class TestNestedDenseModules:
             keras_model = keras_gradient_descent_step(self.keras_model, sample_data, sample_labels, learning_rate=0.01)
 
             self.jaxmao_model.set_trainable(False)
-            jaxmao_prediction, self.states = self.jaxmao_model.apply(sample_data, self.params, self.states)
+            jaxmao_prediction, self.states, _= self.jaxmao_model.apply(sample_data, self.params, self.states)
             keras_prediction = self.keras_model(sample_data, training=False)
             self.jaxmao_model.set_trainable(True)
             

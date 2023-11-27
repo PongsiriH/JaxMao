@@ -8,7 +8,7 @@ import pickle
 train_loader = YOLOv1DataLoader(
                     image_dir='/home/jaxmao/dataset/GTSDB_YOLO/images/train',
                     label_dir='/home/jaxmao/dataset/GTSDB_YOLO/labels/train',
-                    image_size=(416, 416),
+                    image_size=(490, 490),
                     num_grids=7,
                     num_classes=4,
                     batch_size=16,
@@ -19,26 +19,33 @@ train_loader = YOLOv1DataLoader(
 for images, labels in train_loader:
     break
 
-with open('model3.pkl', 'rb') as f:
+with open('model4.pkl', 'rb') as f:
     model, params, states = pickle.load(f)
 
+print(model.conv)
+with Bind(model.conv, params['conv'], states['conv']) as ctx:
+    # pred = ctx.module(images)
+    # print(pred.shape)
+    print(ctx.params_)
+    # print(ctx.module.summary((1, 490, 490, 3)))
 
-with Bind(model, params, states) as ctx:
-    predictions = ctx.module(images)
+
+# with Bind(model, params, states) as ctx:
+#     predictions = ctx.module(images)
     
-idx = 2
-image = images[idx]
-label = labels[idx]
-prediction = predictions[idx]
+# idx = 0
+# image = images[idx]
+# label = labels[idx]
+# prediction = predictions[idx]
 
-best_conf, best_bbox, cls = get_best_prediction(prediction)
-best_conf = apply_confidence_thresh(best_conf, conf_thresh=0.5)
-yolo_prediction = components2yolo(best_bbox, best_conf, cls)
+# best_conf, best_bbox, cls = get_best_prediction(prediction)
+# best_conf = apply_confidence_thresh(best_conf, conf_thresh=0.2)
+# yolo_prediction = components2yolo(best_bbox, best_conf, cls)
 
-plt.subplot(1, 2, 1)
-plot_labels(image, yolo2xywh(label), class_labels=LABELS_DICT_CATEGORIZED_GTSRB, num_grids=7, relative_to_grids=True)
-plt.subplot(1, 2, 2)
-plot_labels(image, yolo2xywh(yolo_prediction), class_labels=LABELS_DICT_CATEGORIZED_GTSRB, num_grids=7, relative_to_grids=True)
-plt.show()
+# plt.subplot(1, 2, 1)
+# plot_labels(image, yolo2xywh(label), class_labels=LABELS_DICT_CATEGORIZED_GTSRB, num_grids=7, relative_to_grids=True)
+# plt.subplot(1, 2, 2)
+# plot_labels(image, yolo2xywh(yolo_prediction), class_labels=LABELS_DICT_CATEGORIZED_GTSRB, num_grids=7, relative_to_grids=True)
+# plt.show()
 
 # print(predictions.shape, predictions)

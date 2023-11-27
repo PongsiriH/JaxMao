@@ -4,7 +4,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = ''
 import numpy as np
 import random, gc, time
 
-from jaxmaov2.modules import (Dense, Conv2d, 
+from jaxmao.modules import (Dense, Conv2d, 
                               GlobalAveragePooling2d, GlobalMaxPooling2d, 
                               Bind, 
                               AveragePooling2d, MaxPooling2d)

@@ -2,17 +2,19 @@ import jax
 
 from dataset import YOLOv1DataLoader
 from loss import YOLO_2bboxes
-from model import YOLOv1
-from jaxmao.modules import Bind, Summary
+from model import FullyConvolutionalYOLOv1
+from jaxmao.modules import Summary
 import jaxmao.optimizers as optim
+
+import pickle
 
 key = jax.random.key(42)
 
 train_loader = YOLOv1DataLoader(
                     image_dir='/home/jaxmao/dataset/GTSDB_YOLO/images/train',
                     label_dir='/home/jaxmao/dataset/GTSDB_YOLO/labels/train',
-                    image_size=(224, 224),
-                    num_grids=7,
+                    image_size=(490, 490),
+                    num_grids=13,
                     num_classes=4,
                     batch_size=16,
                     normalize=True,
@@ -20,8 +22,11 @@ train_loader = YOLOv1DataLoader(
                     image_format='.jpg'
                 )
 
-model = YOLOv1()
+model = FullyConvolutionalYOLOv1()
 params, states = model.init(key)
+# with open('model4.pkl', 'rb') as f:
+#     model, params, states = pickle.load(f)
+    
 yolo_loss = YOLO_2bboxes()
 optimizer = optim.Adam(params, 0.0001)
 
@@ -36,12 +41,12 @@ def train_step(images, labels, params, states, optimizer_states):
     return loss_value, component_loss, params, states, optimizer_states
 
 with Summary(model) as ctx:
-    ctx.summary((16, 224, 224, 3))
+    ctx.summary((16, 490, 490, 3))
 
-for epoch in range(100):
+for epoch in range(2000):
     if epoch == 5:
         optimizer.states['lr'] = 0.001
-    elif epoch > 5:
+    if epoch > 5:
         optimizer.states['lr'] *= 0.99
     total_losses = 0.0
     for batch_idx, (images, labels) in enumerate(train_loader):
@@ -49,8 +54,11 @@ for epoch in range(100):
         total_losses += loss_value
     print('{}: loss: {}, last: {} {}'.format(epoch, total_losses/len(train_loader), loss_value, component_loss))
 
-with open('model3.pkl', 'wb') as f:
-    import pickle
+    if epoch % 200 == 0:
+        with open(f'model6_{epoch}.pkl', 'wb') as f:
+            pickle.dump((model, params, states), f)
+            
+with open('model6_las6.pkl', 'wb') as f:
     pickle.dump((model, params, states), f)
 
 # print(type(images), type(labels))

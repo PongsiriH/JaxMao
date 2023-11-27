@@ -7,7 +7,7 @@ class YOLO_2bboxes(Loss):
     def __init__(self):
         self.lambda_bbox = 5
         self.lambda_obj = 1
-        self.lambda_noobj = 0.5
+        self.lambda_noobj = 0.2
         self.lambda_cls = 1
         self.eps = 1e-6
     
