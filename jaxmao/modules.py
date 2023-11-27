@@ -11,9 +11,7 @@ from jaxmao.module_utils import (
                                 _init, _init_zero,
                                 module_id
                                 )
-
-import copy
-import warnings
+import pickle, os, copy, warnings
 
 class PureContext:
     def __init__(self, module):
@@ -45,7 +43,32 @@ class Bind:
         del self.states_
         del self
 
+class Save:
+    def __init__(self, path):
+        self.path = path
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self):
+        del self.path
+        del self
+    
+    def save(self, item, file_name):
+        path = os.path.join(self.path, file_name)
+        if os.path.exists(path):
+            raise FileExistsError(f"File '{file_name}' already exists.")
+        with open(path, 'wb') as f:
+            pickle.dump(item, f, protocol=pickle.HIGHEST_PROTOCOL)
+            
+    def load(self, file_name):
+        path = os.path.join(self.path, file_name)
+        with open(path, 'rb') as f:
+            loaded_item = pickle.load(f)
+        return loaded_item
+    
 class Summary:
+    """How should I save each layer?"""
     def __init__(self, module):
         self.module = copy.deepcopy(module)
         _init_zero(self.module)
@@ -64,7 +87,7 @@ class Summary:
         del self.module
         del self.params_
         del self.states_
-        
+
 class Module(metaclass=PostInitialization):
     is_collectable = True
     
