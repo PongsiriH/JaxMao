@@ -41,8 +41,11 @@ class VariablesDict:
     def keys(self):
         return self._dict.keys()
         
-    def get_meta(self, name):
-        return self[name].shape, self[name].initializer
+    def get_shape(self, name):
+        return self[name].shape
+    
+    def get_init(self, name):
+        return self[name].initializer
 
     def get_reg(self, name):
         if self[name].regularizer is None:
@@ -112,6 +115,12 @@ class Variable:
     def __call__(self):
         return self._value
 
+    def get_init(self):
+        return self.initializer
+
+    def get_shape(self):
+        return self.shape
+    
     def get_value(self):
         return self._value
     

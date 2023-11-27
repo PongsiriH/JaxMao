@@ -1,5 +1,6 @@
 from typing import Any
 import jax.numpy as jnp
+import numpy as np
 from jax import lax
 import jax
 from jax.tree_util import tree_flatten, tree_unflatten, tree_flatten_with_path
@@ -9,9 +10,23 @@ from jaxmao.module_utils import (
                                  _get_parameters, _get_states, _get_parameters_and_states, _get_states_and_regularizes, _get,
                                 _update_parameters, _update,
                                 _init, _init_zero,
-                                module_id
+                                UniqueID
                                 )
 import pickle, os, copy, warnings
+
+# global id
+# ____id = {
+#     'Sequential',
+#     'Dense',
+#     'Conv2d',
+#     'BatchNorm1d',
+#     'BatchNorm2d',
+#     'Dropout',
+#     'MaxPooling2d',
+#     'AveragePooling2d',
+#     'GlobalMaxPooling2d',
+#     'GlobalAveragePooling2d'
+# }
 
 class PureContext:
     def __init__(self, module):
@@ -91,17 +106,17 @@ class Summary:
 class Module(metaclass=PostInitialization):
     is_collectable = True
     
-    def __init__(self):
+    def __init__(self, name=None):
         self.submodules = dict()
         self.taken_names_ = []
         self.params_ = VariablesDict()
         self.states_ = VariablesDict()
         self.trainable = True
         
-        self._id = module_id()
-        self.num_submodules = 0
-        self.num_params = 0
-        self.num_states = 0
+        self.name = name if name is not None else UniqueID('Module')
+        self.num_submodules = None
+        self.num_params = None
+        self.num_states = None
     
     def _post_init(self):
         for (attr_name, obj) in self.__dict__.items():
@@ -129,14 +144,14 @@ class Module(metaclass=PostInitialization):
             raise ValueError(f"Name {name} does not exist.")
         return self.params_.get_reg_value(name)
             
-    def param(self, name: str, shape=None, initializer=None, regularizer=None):
+    def param(self, name: str, shape=None, initializer=None, regularizer=None, value=None):
         """Manages the parameters of a model."""
         if shape is not None and initializer is not None:
             if name in self.taken_names_:
                 raise ValueError(f"Name {name} is already taken.")
             
             self.taken_names_.append(name)
-            self.params_[name] = Variable(shape, initializer, regularizer)
+            self.params_[name] = Variable(shape, initializer, regularizer, value)
         elif name not in self.taken_names_:
             raise ValueError(f"Name {name} does not exist.")
 
@@ -181,10 +196,9 @@ class Module(metaclass=PostInitialization):
         for name in self.submodules:
             self.submodules[name].set_trainable(trainable)
 
-
 class Sequential(Module):
     def __init__(self, modules: list=None):
-        super().__init__()
+        super().__init__(name=UniqueID('Sequential'))
         if modules is None:
             modules = []
         else:
@@ -205,8 +219,19 @@ class Sequential(Module):
         return x
 
     def add(self, module):
-        self.submodules[module._id] = module
+        self.submodules[module.name] = module
     
+    def summary(self, input_shape):
+        shape = input_shape
+        self.summary_ = 'name shape num_parameters'
+        self.summary_ = '{} {} {}\n'.format('input', shape, 0)
+        for name in self.submodules:
+            x = self.submodules[name](jnp.zeros(shape))
+            shape = x.shape
+            num_params = [name for name in self.params_.keys()]
+            self.summary_ += '{} {} {}\n'.format(name, shape, num_params)
+        return self.summary_
+        
 
 class Dense(Module):
     def __init__(
@@ -218,7 +243,7 @@ class Dense(Module):
         bias_reg=None,
         use_bias=True
     ):
-        super().__init__()
+        super().__init__(name=UniqueID('Dense'))
         self.use_bias = use_bias
         self.out_channels = out_channels
         self.param('kernel', (in_channles, out_channels), kernel_init, kernel_reg)
@@ -247,11 +272,12 @@ class GeneralConv2d(Module):
         padding,
         dilation,
         use_bias, 
+        name,
         bias_shape=None,
         bias_init=None,
         dtype='float32'
     ):
-        super().__init__()
+        super().__init__(name=name)
         self.strides = strides if isinstance(strides, tuple) else (strides, strides) 
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.feature_group_count = feature_group_count
@@ -294,11 +320,11 @@ class Conv2d(GeneralConv2d):
         self.in_channels = in_channels
         self.out_channels = out_channels
         kernel_height, kernel_width = (kernel_size, kernel_size) if isinstance(kernel_size, int) else (kernel_size[0], kernel_size[1])
-        kernnel_shape = (kernel_height, kernel_width, in_channels, out_channels)
+        kernel_shape = (kernel_height, kernel_width, in_channels, out_channels)
         self.use_bias = use_bias
         bias_shape = (out_channels,) if self.use_bias else None
 
-        super().__init__(kernnel_shape, kernel_init,
+        super().__init__(kernel_shape, kernel_init,
                          feature_group_count=1,
                          strides=strides,
                          padding=padding,
@@ -306,6 +332,7 @@ class Conv2d(GeneralConv2d):
                          use_bias=use_bias,
                          bias_shape=bias_shape,
                          bias_init=bias_init,
+                         name=UniqueID('Conv2d'),
                          dtype=dtype)
 
 class BatchNormalization(Module):
@@ -318,9 +345,10 @@ class BatchNormalization(Module):
         running_var_init,
         offset_init,
         scale_init,
+        name,
         eps=1e-6
     ):
-        super().__init__()
+        super().__init__(name=name)
         self.momentum = momentum
         self.axis_mean = axis_mean
         self.eps = eps
@@ -351,7 +379,7 @@ class BatchNorm1d(BatchNormalization):
         scale_init=init.Consts(1),
         eps=1e-6
     ):
-        super().__init__(num_features, momentum, 0, running_mean_init, running_var_init, offset_init, scale_init, eps)
+        super().__init__(num_features, momentum, 0, running_mean_init, running_var_init, offset_init, scale_init, UniqueID('BatchNorm1d'), eps)
         
 class BatchNorm2d(BatchNormalization):
     def __init__(
@@ -364,7 +392,7 @@ class BatchNorm2d(BatchNormalization):
         scale_init=init.Consts(1),
         eps=1e-6
     ):
-        super().__init__(num_features, momentum, (0, 1, 2), running_mean_init, running_var_init, offset_init, scale_init, eps)
+        super().__init__(num_features, momentum, (0, 1, 2), running_mean_init, running_var_init, offset_init, scale_init, UniqueID('BatchNorm2d'), eps)
 
 class Dropout(Module):
     def __init__(self, drop_rate=0.5, key=None):
@@ -408,7 +436,7 @@ class AveragePooling2d(Pooling2d):
         self.kernel_prod = jnp.prod(jnp.array(kernel_size), dtype='float32')
 
     def call(self, inputs):
-        summed_feature = lax.reduce_window(inputs, 0.0, lax.add, (1,)+self.window_shape+(1,), (1,)+self.strides+(1,), self.padding)
+        summed_feature = lax.reduce_window(inputs, 0.0, lax.add, self.kernel_size, self.strides, self.padding)
         return lax.div(summed_feature, self.kernel_prod)
 
 class GlobalMaxPooling2d(Module):
