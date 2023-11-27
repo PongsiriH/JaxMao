@@ -40,9 +40,9 @@ class YOLOv1(Module):
         x = x.reshape(x.shape[0], -1)
         # print('x.shape', x.shape)
         x = self.fc(x).reshape(x.shape[0], self.S, self.S, self.B*5 + self.C)
-        x[..., :3] = jax.nn.sigmoid(x[..., :3])
-        x[..., 5:8] = jax.nn.sigmoid(x[..., 5:8])
-        x[..., 10:] = jax.nn.sigmoid(x[..., 10:])
+        x.at[..., :3].set(jax.nn.sigmoid(x[..., :3]))
+        x.at[..., 5:8].set(jax.nn.sigmoid(x[..., 5:8]))
+        x.at[..., 10:].set(jax.nn.softmax(x[..., 10:]))
         # print('x.shape', x.shape)
         return x
     

@@ -8,7 +8,7 @@ import pickle
 train_loader = YOLOv1DataLoader(
                     image_dir='/home/jaxmao/dataset/GTSDB_YOLO/images/train',
                     label_dir='/home/jaxmao/dataset/GTSDB_YOLO/labels/train',
-                    image_size=(224, 224),
+                    image_size=(416, 416),
                     num_grids=7,
                     num_classes=4,
                     batch_size=16,
@@ -19,14 +19,14 @@ train_loader = YOLOv1DataLoader(
 for images, labels in train_loader:
     break
 
-with open('model2.pkl', 'rb') as f:
+with open('model3.pkl', 'rb') as f:
     model, params, states = pickle.load(f)
 
 
 with Bind(model, params, states) as ctx:
     predictions = ctx.module(images)
     
-idx = 5
+idx = 2
 image = images[idx]
 label = labels[idx]
 prediction = predictions[idx]
