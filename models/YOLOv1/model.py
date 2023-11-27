@@ -3,7 +3,6 @@ from jaxmao.modules import Module, Sequential, Conv2d, BatchNorm2d, Dense, Batch
 import jaxmao.initializers as init
 from config import simplified_yolov1_arch
 
-
 class ConvBnLRelu(Module):
     def __init__(self, in_channels, out_channels, kernel_size=(3,3), strides=(1,1), lrelu_constant=0.1):
         super().__init__()
@@ -40,9 +39,12 @@ class YOLOv1(Module):
         # print('x.shape', x.shape)
         x = x.reshape(x.shape[0], -1)
         # print('x.shape', x.shape)
-        x = self.fc(x)
+        x = self.fc(x).reshape(x.shape[0], self.S, self.S, self.B*5 + self.C)
+        x[..., :3] = jax.nn.sigmoid(x[..., :3])
+        x[..., 5:8] = jax.nn.sigmoid(x[..., 5:8])
+        x[..., 10:] = jax.nn.sigmoid(x[..., 10:])
         # print('x.shape', x.shape)
-        return x.reshape(x.shape[0], self.S, self.S, self.B*5 + self.C)
+        return x
     
     def _build_conv(self):
         sequential = Sequential()

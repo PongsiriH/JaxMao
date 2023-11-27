@@ -33,11 +33,16 @@ class YOLO_2bboxes(Loss):
         # print('selecteed_pred_conf', selecteed_pred_conf.shape)
         # print('selecteed_pred_bbox', selecteed_pred_bbox.shape)
         
-        selecteed_pred_bbox_sqrt = jnp.concatenate([selecteed_pred_bbox[..., :2], jnp.sqrt(selecteed_pred_bbox[..., 2:]+self.eps)], axis=-1)
+        selecteed_pred_bbox_sqrt = jnp.concatenate([selecteed_pred_bbox[..., :2], jnp.sign(selecteed_pred_bbox[..., 2:]) * jnp.sqrt(jnp.abs(selecteed_pred_bbox[..., 2:])+self.eps)], axis=-1)
         pred_cls = y_pred[..., 10:]
         # print(selecteed_pred_conf.shape, selecteed_pred_bbox.shape, pred_cls.shape)
-        print('obj_exists', obj_exists)
-        print('true_bbox_sqrt', true_bbox_sqrt)
+        # print('obj_exists', obj_exists)
+        # print('true_bbox_sqrt', true_bbox_sqrt)
+        # print('selecteed_pred_bbox_sqrt', selecteed_pred_bbox_sqrt)
+        # print('selecteed_pred_conf', selecteed_pred_conf)
+        # print('y_pred[..., :1]', y_pred[..., :1])
+        # print('true_cls', true_cls)
+        # print('pred_cls', pred_cls)
         bbox_loss = obj_exists * (
             jnp.square(true_bbox_sqrt - selecteed_pred_bbox_sqrt)
         )

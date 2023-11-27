@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+LABELS_DICT_CATEGORIZED_GTSRB = dict({0:'prohibitory', 1:'mandatory', 2:'danger', 3:'other'})
+
 """
 Plot utils
 """
@@ -28,7 +30,7 @@ def apply_confidence_thresh(conf, conf_thresh=0.9):
     return np.where(conf >= conf_thresh, 1, 0)
 
 def components2yolo(bbox, conf, cls):
-    selected_bbox = bbox * conf
+    selected_bbox = np.array(bbox * conf)
     selected_bbox = np.where(selected_bbox < 0, 0, selected_bbox)
     # print(selected_bbox.shape, conf.shape, cls.shape, np.concatenate([selected_bbox, cls], axis=-1).shape)
     return np.concatenate([conf, selected_bbox, cls], axis=-1)
@@ -194,3 +196,26 @@ def yolo2xywh(yolo_labels, threshold=0.0):
 
     return xywh_list
 
+class Results:
+    def __init__(self, column_names: list):
+        self.column_names = column_names
+        self.data = {column_name: [] for column_name in self.column_names}
+    
+    def append(self, data: list):
+        if len(data) != len(self.column_names):
+            raise ValueError("len(data) != len(self.column_names). where self.column_names are {}".format(self.column_names))
+        
+        if isinstance(data, list):
+            for idx, column_name in enumerate(self.column_names):
+                self.data[column_name].append(data[idx])
+        elif isinstance(data, dict):
+            for column_name in self.column_names:
+                self.data[column_name].append(data[column_name]) 
+    
+    def plot(self, column_name: str):
+        if column_name not in self.column_names:
+            raise ValueError("column_name not in self.column_names. where self.column_names are {}".format(self.column_names))
+        x = np.arange(len(self.data[column_name]), step=0.01)
+        y = self.data[column_name]
+        plt.plot(x, y)
+        plt.grid()
