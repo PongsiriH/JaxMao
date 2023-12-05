@@ -5,22 +5,21 @@ from jax.tree_util import tree_map
 
 class optimizers:
     def __init__(self, params=None, lr=0.01):
-        pass
+        self.states ={'lr': lr}
             
-    def __call__(self, params, gradients, states):
+    def __call__(self, params, gradients, states, ):
         return self.step(params, gradients, states)
         
 class GradientDescent(optimizers):
     def __init__(self, params=None, lr=0.01):
-        super().__init__()
-        self.states = {'lr': lr}
+        super().__init__(params=params, lr=lr)
         
     def step(self, params, gradients, states):
         return tree_map(lambda p, g : p - g*states['lr'], params, gradients), states
     
 class Adam(optimizers):
     def __init__(self, params, lr=0.01, beta1=0.9, beta2=0.999, eps=1e-7):
-        super().__init__()
+        super().__init__(params=params, lr=lr)
         self.eps = eps
         self.states = {
             'lr' : lr,
