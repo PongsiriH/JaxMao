@@ -21,6 +21,15 @@ class Consts(Initializer):
                  dtype='float'):
         return jnp.full(shape, self.value, dtype) 
 
+class ValueInitializer(Initializer):
+    def __init__(self, value):
+        self.value = value        
+    def __call__(self, 
+                 key, 
+                 shape,
+                 dtype=None):
+        return jnp.array(self.value)
+    
 class HeNormal(Initializer):
     def __call__(self, 
                  key, 

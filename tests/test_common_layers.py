@@ -1,10 +1,13 @@
+"""TODO
+Conv2dTransposed's shape, batchnorms ()
+"""
 import os
 os.environ["JAX_PLATFORM_NAME"] = "cpu"
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 import numpy as np
 import random, gc, time
 
-from jaxmao.modules import (Dense, Conv2d, 
+from jaxmao import (Dense, Conv2d, Conv2dTransposed,
                               GlobalAveragePooling2d, GlobalMaxPooling2d, 
                               Bind, 
                               AveragePooling2d, MaxPooling2d)
@@ -267,6 +270,55 @@ class TestConv2D:
         assert jaxmao_predicted.shape == keras_predicted.shape
         assert np.allclose(jaxmao_predicted, keras_predicted.numpy(), atol=atol)
 
+class TestConv2dTransposed:
+    def test_all(self):
+        self.test_shapes()
+        self.test_value_with_Keras()
+        
+    def test_shapes(self):
+        pass
+    
+    def test_value_with_Keras(self):
+        seed = 22
+        batch_size = 40
+        height, width = 77, 77
+        in_channels = 3
+        out_channels = 44
+        kernel_size = (4, 4)
+        strides = (2, 2)
+        padding = 'same'
+        atol = 5e-4
+        
+        for _ in range(100):
+            keras.backend.clear_session()
+            gc.collect()
+            
+            seed = np.random.randint(0, 100)  # Random seed between 0 and 99
+            batch_size = np.random.randint(1, 10)  # Random batch size between 1 and 99
+            height, width = np.random.randint(1, 20), np.random.randint(1, 20)  # Random height and width
+            in_channels = np.random.randint(1, 10)  # Random number of input channels between 1 and 9
+            out_channels = np.random.randint(1, 20)  # Random number of output channels between 1 and 99
+            kernel_size = (np.random.randint(1, 10), np.random.randint(1, 10))  # Random kernel size (1 to 9)
+            strides = (np.random.randint(1, 5), np.random.randint(1, 5))  # Random strides (1 to 4)
+
+            sample_data = np.random.normal(5, 20, (batch_size, height, width, in_channels))
+
+            # JAX Conv2D model
+            jaxmao_model = Conv2dTransposed(in_channels, out_channels, kernel_size, padding=padding, strides=strides)
+            params, states = jaxmao_model.init(jax.random.PRNGKey(seed=seed))
+            jaxmao_predicted, _, _ = jaxmao_model.apply(sample_data, params, states)
+            
+            # Keras Conv2D model
+            keras_model = keras.layers.Conv2DTranspose(out_channels, kernel_size, strides=strides, padding=padding, input_shape=(height, width, in_channels))
+            keras_model.build(input_shape=(None, height, width, in_channels))
+            keras_model.set_weights([jax.numpy.transpose(params['kernel'], (0, 1, 2, 3)), params['bias']])
+            keras_predicted = keras_model(sample_data.astype(np.float32))
+
+            # print((jaxmao_predicted - keras_predicted.numpy()).max())
+            assert jaxmao_predicted.shape == keras_predicted.shape
+            assert np.allclose(jaxmao_predicted, keras_predicted.numpy(), atol=atol)
+    
+    
 class TestBN1d:
     pass
 
@@ -527,7 +579,7 @@ class TestMaxPooling2D:
             assert np.allclose(jaxmao_out[:, 1:w-2, 1:h-2, :], keras_out.numpy()[:, 1:w-2, 1:h-2, :], atol=self.atol)
 
      
-def test_all():
+def test_all():    
     dense = TestDense()
     dense.test_all()
     print('Dense passed')
@@ -535,6 +587,10 @@ def test_all():
     conv2d = TestConv2D()
     conv2d.test_all()
     print('Conv2d passed')
+
+    conv_transposed = TestConv2dTransposed()
+    conv_transposed.test_all()
+    print('Conv2dTransposed passed')
 
     gap = TestGAP2d()
     gap.test_value()

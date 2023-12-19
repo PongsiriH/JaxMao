@@ -1,12 +1,13 @@
 
 from sklearn.datasets import load_digits
 from torch.utils.data import DataLoader, Dataset
-from jaxmaov2.modules import Module, Dense, Bind
-from jaxmaov2 import losses, optimizers
+from jaxmao import Module, Dense, Bind
+from jaxmao import losses, optimizers
 import jax
-from jaxmaov2 import regularizers 
+from jaxmao import regularizers 
 from sklearn.metrics import accuracy_score
-
+jax.config.update('jax_check_tracer_leaks', True)
+jax.config.update('JAX_TRACEBACK_FILTERING'.lower(), 'off')
 
 def get_dataloader(batch_size, shuffle):
     class DigitsDataset(Dataset):
@@ -48,6 +49,9 @@ if __name__ == '__main__':
     params, states = model.init(key)
     optimizer = optimizers.GradientDescent(params=params, lr=0.01)
     loss_fn = losses.CategoricalCrossEntropy()
+    
+    import copy
+    model_copied = copy.deepcopy(model)
     
     @jax.jit
     def train_step(images, targets, params, states, optimizer_states):

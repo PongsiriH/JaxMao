@@ -1,3 +1,5 @@
+import copy
+import jax.numpy as jnp
 import jax
 from jax.tree_util import (
     tree_flatten,
@@ -151,6 +153,18 @@ class Variable:
         shape, initializer, regularizer = metadata
         return Variable(shape, initializer, regularizer, data[0])
 
+    def __deepcopy__(self, memo):
+        if isinstance(self._value, jax.Array):
+            copied_value, _ = jax.random.split(self._value, 2)
+            print('copied_value', copied_value)
+        else:
+            copied_value = copy.deepcopy(self._value, memo)
+        
+        copied_shape = copy.deepcopy(self.shape, memo)
+        copied_initializer = copy.deepcopy(self.initializer, memo)
+        copied_regularizer = copy.deepcopy(self.regularizer, memo)
+        
+        return Variable(copied_shape, copied_initializer, copied_regularizer, copied_value)
 
 
 class LightModule:

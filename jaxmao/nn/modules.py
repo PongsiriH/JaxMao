@@ -1,19 +1,20 @@
 from typing import Any
+
 import jax.numpy as jnp
-import numpy as np
 from jax import lax
 import jax
 from jax.tree_util import tree_flatten, tree_unflatten, tree_flatten_with_path
-import jaxmao.initializers as init
-from jaxmao.utils_struct import (PostInitialization, VariablesDict, Variable, LightModule)
-from jaxmao.module_utils import (
+import jaxmao.nn.initializers as init
+from jaxmao.nn.utils_struct import (PostInitialization, VariablesDict, Variable, LightModule)
+from jaxmao.nn.module_utils import (
                                  _get_parameters, _get_states, _get_parameters_and_states, _get_states_and_regularizes, _get,
                                 _update_parameters, _update,
                                 _init, _init_zero,
                                 UniqueID
                                 )
 import pickle, os, copy, warnings
-
+from functools import partial
+MAX_UINT32 =  4_294_967_295
 # global id
 # ____id = {
 #     'Sequential',
@@ -27,11 +28,10 @@ import pickle, os, copy, warnings
 #     'GlobalMaxPooling2d',
 #     'GlobalAveragePooling2d'
 # }
-
 class PureContext:
     def __init__(self, module):
-        # self.module = copy.deepcopy(module)
         self.module = copy.deepcopy(LightModule(module.__call__, module.submodules, module.taken_names_, module.params_, module.states_))
+        # self.module = copy.deepcopy(module)
         
     def __enter__(self):
         return self
@@ -39,7 +39,33 @@ class PureContext:
     def __exit__(self, *args, **kwargs):
         del self.module
         del self
+
+@partial(jax.jit, static_argnums=(0, 4))
+def apply(module, inputs, params, states, method_fn):
+    _update(module, params, states)
+    out = method_fn(inputs)
+    states , reg = _get_states_and_regularizes(module)
+    return out, states, reg
+    
+class Train:
+    def __init__(self, module, params, states):
+        self.module = copy.deepcopy(LightModule(module.__call__, module.submodules, module.taken_names_, module.params_, module.states_))
+        _update(self.module, params, states)
         
+    def __enter__(self):
+        return self
+    
+    def apply(self, inputs, params, states, method_fn=None):
+        if method_fn is None:
+            method_fn = self.module.__call__
+        return apply(self.module, inputs, params, states, method_fn)
+
+    def __exit__(self, *args, **kwargs):
+        del self.module.params_
+        del self.module.states_
+        del self.module
+        del self
+         
 class Bind:
     def __init__(self, module, params, states, trainable=False):
         self.module = copy.deepcopy(module)
@@ -146,7 +172,7 @@ class Module(metaclass=PostInitialization):
             
     def param(self, name: str, shape=None, initializer=None, regularizer=None, value=None):
         """Manages the parameters of a model."""
-        if shape is not None and initializer is not None:
+        if shape is not None and (initializer is not None or value is not None):
             if name in self.taken_names_:
                 raise ValueError(f"Name {name} is already taken.")
             
@@ -157,14 +183,15 @@ class Module(metaclass=PostInitialization):
 
         return self.params_.get_value(name)
     
-    def state(self, name: str, shape=None, initializer=None):
+    def state(self, name: str, shape=None, initializer=None, value=None):
         """Manages the states of a model."""
-        if shape is not None and initializer is not None:
+        if not (shape is None and initializer is None and value is None):
             if name in self.taken_names_:
                 raise ValueError(f"Name {name} is already taken.")
+            # initializer = init.NoInitializer() if initializer is None else initializer
             
             self.taken_names_.append(name)
-            self.states_[name] = Variable(shape, initializer)
+            self.states_[name] = Variable(shape, initializer, None, value)
         elif name not in self.taken_names_:
             raise ValueError(f"Name {name} does not exist.")
 
@@ -268,37 +295,48 @@ class GeneralConv2d(Module):
         kernel_shape, 
         kernel_init,
         feature_group_count : int,
-        strides,
+        window_strides,
         padding,
-        dilation,
+        lhs_dilation,
+        rhs_dilation,
+        kernel_reg,
+        bias_reg,
         use_bias, 
         name,
-        bias_shape=None,
-        bias_init=None,
+        bias_shape,
+        bias_init,
+        dimension_numbers,
         dtype='float32'
     ):
         super().__init__(name=name)
-        self.strides = strides if isinstance(strides, tuple) else (strides, strides) 
-        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        lhs_dilation = (1, 1) if lhs_dilation is None else lhs_dilation
+        rhs_dilation = (1, 1) if rhs_dilation is None else rhs_dilation
+        self.window_strides = window_strides if isinstance(window_strides, tuple) else (window_strides, window_strides) 
+        self.lhs_dilation = lhs_dilation if isinstance(lhs_dilation, tuple) else (lhs_dilation, lhs_dilation)
+        self.rhs_dilation = rhs_dilation if isinstance(rhs_dilation, tuple) else (rhs_dilation, rhs_dilation)
         self.feature_group_count = feature_group_count
         self.use_bias = use_bias
-        padding = padding.upper()
-        if not padding in ['SAME', 'SAME_LOWER', 'VALID']:
-            warnings.warn(f"Unsupported padding type: {padding}. Using 'SAME' as default.")
-            padding = 'SAME'
-        self.padding = padding
-        
-        self.param('kernel', kernel_shape, kernel_init)
+        self.dimension_numbers = dimension_numbers
+        if isinstance(padding, str):
+            padding = padding.upper()
+            if not padding in ['SAME', 'SAME_LOWER', 'VALID']:
+                warnings.warn(f"Unsupported padding type: {padding}. Using 'SAME' as default.")
+                padding = 'SAME'
+            self.padding = padding
+        else:
+            self.padding = padding
+            
+        self.param('kernel', kernel_shape, kernel_init, kernel_reg)
         if self.use_bias:
-            self.param('bias', bias_shape, bias_init)
+            self.param('bias', bias_shape, bias_init, bias_reg)
     
     def call(self, x):
         x = lax.conv_general_dilated(x, self.param('kernel'), 
-                                     window_strides = self.strides, 
+                                     window_strides = self.window_strides, 
                                      padding = self.padding,
-                                     lhs_dilation = None, 
-                                     rhs_dilation = self.dilation,
-                                     dimension_numbers = ('NHWC', 'HWIO', 'NHWC'),
+                                     lhs_dilation = self.lhs_dilation, 
+                                     rhs_dilation = self.rhs_dilation,
+                                     dimension_numbers = self.dimension_numbers,
                                      feature_group_count = self.feature_group_count)
         if self.use_bias:
             x = x + self.param('bias')
@@ -315,6 +353,8 @@ class Conv2d(GeneralConv2d):
             use_bias=True, 
             kernel_init=init.HeNormal(),
             bias_init=init.Zeros(),
+            kernel_reg=None,
+            bias_reg=None,
             dtype='float32'
     ):
         self.in_channels = in_channels
@@ -323,17 +363,62 @@ class Conv2d(GeneralConv2d):
         kernel_shape = (kernel_height, kernel_width, in_channels, out_channels)
         self.use_bias = use_bias
         bias_shape = (out_channels,) if self.use_bias else None
-
+        
         super().__init__(kernel_shape, kernel_init,
-                         feature_group_count=1,
-                         strides=strides,
-                         padding=padding,
-                         dilation=dilation,
-                         use_bias=use_bias,
-                         bias_shape=bias_shape,
-                         bias_init=bias_init,
-                         name=UniqueID('Conv2d'),
-                         dtype=dtype)
+                        feature_group_count=1,
+                        window_strides=strides,
+                        padding=padding,
+                        lhs_dilation=None,
+                        rhs_dilation=dilation,
+                        kernel_reg=kernel_reg,
+                        bias_reg=bias_reg,
+                        use_bias=use_bias,
+                        bias_shape=bias_shape,
+                        bias_init=bias_init,
+                        dimension_numbers=('NHWC', 'HWIO', 'NHWC'),
+                        name=UniqueID('Conv2d'),
+                        dtype=dtype
+                         )
+
+class Conv2dTransposed(Module):
+    def __init__(self, 
+            in_channels, 
+            out_channels, 
+            kernel_size, 
+            strides=(1, 1),
+            padding='SAME',
+            dilation=(1, 1),
+            use_bias=True, 
+            kernel_init=init.HeNormal(),
+            bias_init=init.Zeros(),
+            dtype='float32'
+    ):
+        super().__init__(name=UniqueID('Conv2dTransposed'))
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+        kernel_shape = kernel_size + (self.out_channels, self.in_channels, )
+        self.strides = (strides, strides) if isinstance(strides, int) else strides
+        self.padding = padding.upper() if isinstance(padding, str) else padding
+        self.dilation = (dilation, dilation) if isinstance(dilation, int) else dilation
+        self.use_bias = use_bias
+        self.kernel_init = kernel_init
+        self.bias_init = bias_init
+        self.dtype = dtype
+        self.param('kernel', kernel_shape, kernel_init)
+        self.param('bias', (out_channels, ), bias_init)
+    
+
+    def call(self, x):
+        x = lax.conv_transpose(x, self.param('kernel'), 
+                                strides = self.strides, 
+                                padding = self.padding,
+                                rhs_dilation = self.dilation,
+                                transpose_kernel=True,
+                                dimension_numbers = ('NHWC', 'HWIO', 'NHWC'))
+        if self.use_bias:
+            x = x + self.param('bias')
+        return x
 
 class BatchNormalization(Module):
     def __init__(
@@ -395,22 +480,27 @@ class BatchNorm2d(BatchNormalization):
         super().__init__(num_features, momentum, (0, 1, 2), running_mean_init, running_var_init, offset_init, scale_init, UniqueID('BatchNorm2d'), eps)
 
 class Dropout(Module):
-    def __init__(self, drop_rate=0.5, key=None):
+    def __init__(self, drop_rate=0.5, seed=None):
         super().__init__()
-        if key is None:
-            warnings.warn('Dropout key is not provided. Proceed with default key. Be careful with randomness.')
-            key = jax.random.key(42)
-        self.state('drop_rate', None, None)
-        self.state('key', None, None)
-        self.set_value('drop_rate', drop_rate)
-        self.set_value('key', key)
+        if seed is None:
+            warnings.warn('Dropout seed is not provided. Proceed with default seed. Be careful with randomness.')
+            seed = 42
+        if not (0 <= drop_rate <= 1):
+            warnings.warn("drop_rate should be in range [0, 1]. automatically rounded.")
+            drop_rate = jnp.maximum(0.0, jnp.minimum(1, drop_rate))
+        
+        self.state('drop_rate', shape=(), initializer=init.ValueInitializer(drop_rate))
+        self.state('seed', shape=(), initializer=init.ValueInitializer(seed))
     
     def call(self, inputs):
-        keep_rate = 1 - self.state('drop_rate')
-        key, subkey = jax.random.split(self.state('key'))
-        mask = jax.random.bernoulli(subkey, keep_rate, inputs.shape)
-        self.set_value('key', key)
-        return inputs * mask / keep_rate
+        if self.trainable:
+            key, subkey = jax.random.split(jax.random.key(self.state('seed')))
+            
+            keep_rate = 1 - self.state('drop_rate')            
+            mask = jax.random.bernoulli(subkey, keep_rate, inputs.shape)
+            self.set_value('seed', jax.random.randint(key, (), 0, MAX_UINT32 // 2) )
+            return inputs * mask / (keep_rate+1e-8)
+        return inputs
 
 """Poolings: actually, just use flax. it make more sense to take a functional approach."""
 def max_pool_2d(x, window_shape, strides):
