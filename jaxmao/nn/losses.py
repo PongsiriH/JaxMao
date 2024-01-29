@@ -52,9 +52,7 @@ class CategoricalCrossEntropy(Loss):
     def call(self, y_pred, y_true):   
         y_pred /= jnp.sum(y_pred, axis=-1, keepdims=True)
         y_pred = jnp.clip(y_pred, self.eps, 1 - self.eps)
-        return (-jnp.sum(y_true * jnp.log(y_pred), axis=-1))  
-        negative_log_likelihood = -y_true * jnp.log(y_pred)
-        return self.reduce_fn(jnp.sum(negative_log_likelihood, axis=-1))
+        return self.reduce_fn(-jnp.sum(y_true * jnp.log(y_pred), axis=-1))  
 
 class BCEWithLogitsLoss(Loss):
     def call(self, logits, y_true):
@@ -65,10 +63,6 @@ class BCEWithLogitsLoss(Loss):
                 -y_true * log_p - (1. - y_true) * log_not_p, axis=-1, keepdims=self.keepdims
             )
         )
-
-        y_pred = jax.nn.sigmoid(logits)
-        y_pred_clipped = jnp.clip(y_pred, self.eps, 1 - self.eps)
-        return -self.reduce_fn(y_true * jnp.log(y_pred_clipped) + (1 - y_true) * jnp.log(1 - y_pred_clipped))
 
 class FocalLossLogit(Loss):
     def __init__(self, alpha=1.0, gamma=2.0, reduce_fn=jnp.mean):
