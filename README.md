@@ -1,11 +1,15 @@
 # JaxMao: Another Machine learning library using Jax.
 
-If you find this, you are probably in a similar learning journey as me. I hope for this resource to be helpful.
+Mostly Neural Network and Conformal predictions for now. I will expand in a future.
 
-I have build this library as part of my personal learning project. My goal is to build various machine learning algorithms using the JAX library.
+<hr>
 
 # Classifier
 ```python
+from jaxmao import Module, Dense
+from jaxmao import regularizers
+import jax
+
 class MnistClassifier(Module):
     def __init__(self):
         super().__init__()
