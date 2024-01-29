@@ -11,11 +11,16 @@ class optimizers:
         return self.step(params, gradients, states)
         
 class GradientDescent(optimizers):
-    def __init__(self, params=None, lr=0.01):
+    def __init__(self, params=None, lr=0.01, momentum=0.9):
         super().__init__(params=params, lr=lr)
+        self.states['momentum'] = momentum
+        self.states['velocity'] = tree_map(lambda x: jnp.zeros_like(x), params)
         
     def step(self, params, gradients, states):
-        return tree_map(lambda p, g : p - g*states['lr'], params, gradients), states
+        def _update_velocity(gradients, velocity):
+            return (velocity * states['momentum']) - states['lr'] * gradients
+        states['velocity'] = tree_map(_update_velocity, gradients, states['velocity'])
+        return tree_map(lambda p, v: p + v, params, states['velocity']), states
     
 class Adam(optimizers):
     def __init__(self, params, lr=0.01, beta1=0.9, beta2=0.999, eps=1e-7):

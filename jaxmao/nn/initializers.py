@@ -65,3 +65,21 @@ class GlorotUniform(Initializer):
         limit = jnp.sqrt(6 / fan_avg)
 
         return jax.random.uniform(subkey, shape, dtype, -limit, limit)
+
+class GlorotNormal(Initializer):
+    def __call__(self, key, shape, dtype='float32'):
+        key, subkey = jax.random.split(key)
+
+        if len(shape) == 1:  # Bias or 1D weights
+            fan_in = fan_out = shape[0]
+        elif len(shape) == 2:  # Dense layer
+            fan_in, fan_out = shape
+        elif len(shape) == 4:  # Convolutional layer
+            receptive_field_size = shape[0] * shape[1]
+            fan_in = shape[2] * receptive_field_size
+            fan_out = shape[3] * receptive_field_size
+        else:
+            raise ValueError("Unrecognized tensor shape.")
+
+        stddev = jnp.sqrt(2.0 / (fan_in + fan_out))
+        return jax.random.normal(subkey, shape, dtype) * stddev

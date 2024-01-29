@@ -1,9 +1,12 @@
 from typing import Any
 
+import numpy as np
 import jax.numpy as jnp
 from jax import lax
 import jax
 from jax.tree_util import tree_flatten, tree_unflatten, tree_flatten_with_path
+from param import output
+import torch
 import jaxmao.nn.initializers as init
 from jaxmao.nn.utils_struct import (PostInitialization, VariablesDict, Variable, LightModule)
 from jaxmao.nn.module_utils import (
@@ -78,6 +81,124 @@ class Bind:
         _update(self.module, self.params_, self.states_)
         return self
     
+    def predict(self, inputs, batch_size=None):
+        if batch_size is None:
+            return self.module(inputs)
+
+        num_batches = inputs.shape[0] // batch_size
+        remaining_batch = inputs.shape[0] % batch_size
+        outputs = np.zeros(shape=[inputs.shape[0]]+ list(self.module(inputs[:1]).shape[1:]))
+        jitted_module = jax.jit(self.module.__call__)
+        for batch_idx in range(num_batches):
+            starting_idx = batch_idx * batch_size
+            ending_idx = (batch_idx+1) * batch_size
+            outputs[starting_idx:ending_idx] = jitted_module(inputs[starting_idx:ending_idx])
+        if remaining_batch != 0:
+            starting_idx = num_batches * batch_size
+            ending_idx = inputs.shape[0]
+            outputs[starting_idx:ending_idx] = self.module.__call__(inputs[starting_idx:ending_idx])
+        return outputs
+    
+    def predict_loader(self, loader, max_batches=np.inf, verbose=1):
+        from torch.utils.data import DataLoader
+        if isinstance(loader, DataLoader):
+            data = loader.dataset.__getitem__(0)
+            try:
+                x, y = data
+            except:
+                x = data
+            x = np.array(x)[None]
+            batch_size: int = loader.batch_size
+            total_batch = min(len(loader), max_batches) * batch_size
+        else:
+            raise NotImplementedError()
+        
+        
+        jitted_module = jax.jit(self.module.__call__)
+        first_batch_output = jitted_module(x)
+        list_output = isinstance(first_batch_output, list)
+        if list_output:
+            outputs_shape = [[total_batch] + list(out.shape[1:]) for out in first_batch_output]
+            outputs = [np.zeros(shape) for shape in outputs_shape]
+        else:
+            outputs_shape = [total_batch] + list(first_batch_output.shape[1:])
+            outputs = np.zeros(outputs_shape)
+        
+        starting_idx = 0
+        enumerate_loader = enumerate(loader)
+        if verbose >= 1:
+            import tqdm
+            enumerate_loader = tqdm.tqdm(enumerate_loader)
+        for batch_idx, (inputs, _ )in enumerate_loader:
+            inputs = np.array(inputs)
+            if batch_idx >= max_batches:
+                break
+            batch_size = inputs.shape[0]
+            ending_idx = starting_idx + batch_size
+            if list_output:
+                for i, output in enumerate(jitted_module(inputs)):
+                    outputs[i][starting_idx:ending_idx] = output
+            else:
+                outputs[starting_idx:ending_idx] = jitted_module(inputs)
+            starting_idx = ending_idx
+        return outputs
+
+    def evaluate_loader(self, loader, eval_fn, max_batches=np.inf, return_src=False, return_dict=False, verbose=1):
+        from torch.utils.data import DataLoader
+        if isinstance(loader, DataLoader):
+            for data in loader:
+                break
+            try:
+                x, _ = data
+            except:
+                x = data
+            x = np.array(x)
+            batch_size: int = loader.batch_size
+            total_batch = min(len(loader), max_batches) * batch_size
+        else:
+            raise NotImplementedError()
+        
+        jitted_module = jax.jit(self.module.__call__)
+        first_batch_output = jitted_module(x)
+        list_output = isinstance(first_batch_output, list)
+        
+        if list_output:
+            outputs_shape = [[total_batch] + list(out.shape[1:]) for out in first_batch_output]
+            predictions = [np.zeros(shape) for shape in outputs_shape]
+        else:
+            outputs_shape = [total_batch] + list(first_batch_output.shape[1:])
+            predictions = np.zeros(outputs_shape)
+        labels = []
+        
+        enumerate_loader = enumerate(loader)
+        if verbose >= 1:
+            import tqdm
+            enumerate_loader = tqdm.tqdm(enumerate_loader)
+            
+        starting_idx = 0
+        for batch_idx, (inputs, targets) in enumerate_loader:
+            inputs = np.array(inputs)
+            ending_idx = starting_idx + inputs.shape[0]
+            if batch_idx >= max_batches:
+                break
+            if list_output:
+                for i, output in enumerate(jitted_module(inputs)):
+                    predictions[i][starting_idx:ending_idx] = output
+            else:
+                predictions[starting_idx:ending_idx] = jitted_module(inputs)
+            labels.append(targets)
+            starting_idx = ending_idx
+
+        evaluation_result = eval_fn(predictions, labels)
+        if return_src:
+            evaluation_result = (evaluation_result, x, labels, predictions)
+        if return_dict:
+            keys = ['scores'] 
+            if return_src:
+                keys = keys + ['x', 'targets', 'predictions']
+            evaluation_result = {k: v for k, v in zip(keys, evaluation_result)}
+        return evaluation_result
+
     def __exit__(self, *args, **kwargs):
         del self.module
         del self.params_
@@ -155,7 +276,7 @@ class Module(metaclass=PostInitialization):
     def __call__(self, inputs):
         if self.trainable:
             return self.call(inputs)
-        return jax.lax.stop_gradient(self.call(inputs))   
+        return jax.lax.stop_gradient(self.call(jax.lax.stop_gradient(inputs)) )
     
     def set_value(self, name, value):
         if name not in self.taken_names_:
@@ -210,14 +331,14 @@ class Module(metaclass=PostInitialization):
         for name in self.submodules:
             _structure[name] = self.submodules[name].structure()
         return _structure
-
+    
     def apply(self, inputs, params, states):
         with PureContext(self) as ctx:
             _update(ctx.module, params, states)
             out = ctx.module(inputs)
             states , reg = _get_states_and_regularizes(ctx.module)
         return out, states, reg
-    
+        
     def set_trainable(self, trainable):
         self.trainable = trainable
         for name in self.submodules:
@@ -232,7 +353,6 @@ class Sequential(Module):
             # if not all(isinstance(module, Module) for module in modules):
             #     raise ValueError("All elements in 'modules' must be instances of 'Module'")
             modules = list(modules)
-        self.submodules = {}
         [self.add(module) for module in modules]        
     
     # def _post_init(self):
@@ -351,7 +471,7 @@ class Conv2d(GeneralConv2d):
             padding='SAME',
             dilation=(1, 1),
             use_bias=True, 
-            kernel_init=init.HeNormal(),
+            kernel_init: init.Initializer=init.HeNormal(),
             bias_init=init.Zeros(),
             kernel_reg=None,
             bias_reg=None,
@@ -494,14 +614,44 @@ class Dropout(Module):
     
     def call(self, inputs):
         if self.trainable:
-            key, subkey = jax.random.split(jax.random.key(self.state('seed')))
+            key, key_mask, key_seed = jax.random.split(jax.random.key(self.state('seed')), 3)
             
             keep_rate = 1 - self.state('drop_rate')            
-            mask = jax.random.bernoulli(subkey, keep_rate, inputs.shape)
-            self.set_value('seed', jax.random.randint(key, (), 0, MAX_UINT32 // 2) )
+            mask = jax.random.bernoulli(key_mask, keep_rate, inputs.shape)
+            self.set_value('seed', jax.random.randint(key_seed, (), 0, MAX_UINT32 // 2) )
             return inputs * mask / (keep_rate+1e-8)
         return inputs
 
+class DropBlock(Module):
+    def __init__(self, block_size, drop_rate=0.05, seed=None):
+        super().__init__()
+        if seed is None:
+            warnings.warn('DropBlock seed is not provided. Proceed with default seed. Be careful with randomness.')
+            seed = 42
+        if not (0 <= drop_rate <= 1):
+            warnings.warn("drop_rate should be in range [0, 1]. automatically rounded.")
+            drop_rate = jnp.maximum(0.0, jnp.minimum(1, drop_rate))
+        
+        self.state('drop_rate', shape=(), initializer=init.ValueInitializer(drop_rate))
+        self.state('seed', shape=(), initializer=init.ValueInitializer(seed))
+        self.block_size = (block_size, block_size) if isinstance(block_size, int) else block_size
+        
+    def call(self, inputs: jax.Array):
+        if self.trainable:
+            key, key_mask, key_seed = jax.random.split(jax.random.key(self.state('seed')), 3)
+            
+            keep_rate = 1 - self.state('drop_rate')  
+            feat_size_square = inputs.shape[1] * inputs.shape[2]
+            block_size_square = self.block_size[0] * self.block_size[1]
+            
+            gamma = (self.state('drop_rate')) / block_size_square * feat_size_square / (inputs.shape[1] - self.block_size[0] + 1) / (inputs.shape[2] - self.block_size[1] + 1)
+                      
+            mask = jax.random.bernoulli(key_mask, gamma, inputs.shape)
+            mask = lax.reduce_window(mask, False, jnp.logical_or, (1,)+self.block_size+(1,), (1, 1, 1, 1), 'SAME')
+            self.set_value('seed', jax.random.randint(key_seed, (), 0, MAX_UINT32 // 2) )
+            return inputs * ~mask
+        return inputs
+    
 """Poolings: actually, just use flax. it make more sense to take a functional approach."""
 def max_pool_2d(x, window_shape, strides):
     return lax.reduce_window(x, -jnp.inf, lax.max, (1,)+window_shape+(1,), (1,)+strides+(1,), 'VALID')
