@@ -56,32 +56,30 @@ class ConformalAPS:
         self.n_training_samples  = len(X)
         
         y_enc = label_binarize(y)
-        est_prob_prediction = self.estimator.predict_proba(X)
-        index_sorted = jnp.argsort(est_prob_prediction, axis=1)[:, ::-1]
-        est_prob_sorted = jnp.take_along_axis(est_prob_prediction, index_sorted, axis=1)
-        est_prob_cumsum = jnp.cumsum(est_prob_sorted, axis=1)
+        estimated_score = self.estimator.predict_proba(X)
+        index_sorted = jnp.argsort(estimated_score, axis=1)[:, ::-1]
+        estimated_score_sorted = jnp.take_along_axis(estimated_score, index_sorted, axis=1)
+        estimated_score_cumsum = jnp.cumsum(estimated_score_sorted, axis=1)
 
         y_enc_sorted = jnp.take_along_axis(y_enc, index_sorted, axis=1)
         cutoff = jnp.argmax(y_enc_sorted, axis=1)
-        self.conformity_score = jnp.take_along_axis(est_prob_cumsum, cutoff.reshape(-1, 1), axis=1)
+        self.conformity_score = jnp.take_along_axis(estimated_score_cumsum, cutoff.reshape(-1, 1), axis=1)
         if rand:
             global cp_clf_key
             cp_clf_key, subkey = jax.random.split(cp_clf_key)
-            y_proba_true = np.take_along_axis(est_prob_prediction, y_enc.reshape(-1, 1), axis=1)
+            y_proba_true = np.take_along_axis(estimated_score, y_enc.reshape(-1, 1), axis=1)
             self.conformity_score = self.conformity_score - jax.random.uniform(subkey, len(y_proba_true)) * y_proba_true
         
 
     def predict(self, X, alpha):
         quantile = jnp.quantile(self.conformity_score, np.ceil((self.n_training_samples + 1) * (1 - alpha)) / self.n_training_samples, method="higher")
         
-        est_prob_prediction = self.estimator.predict_proba(X)
-        index_sorted = jnp.argsort(est_prob_prediction, axis=1)[:, ::-1]
-        est_prob_sorted = jnp.take_along_axis(est_prob_prediction, index_sorted, axis=1)
-        est_prob_cumsum = jnp.cumsum(est_prob_sorted, axis=1)
-        prediction_sets = jnp.take_along_axis(est_prob_cumsum <= quantile, est_prob_sorted.argsort(axis=1), axis=1)
-        return est_prob_prediction, prediction_sets
+        estimated_score = self.estimator.predict_proba(X)
+        index_sorted = jnp.argsort(estimated_score, axis=1)[:, ::-1]
+        estimated_score_sorted = jnp.take_along_axis(estimated_score, index_sorted, axis=1)
+        estimated_score_cumsum = jnp.cumsum(estimated_score_sorted, axis=1)
+        prediction_sets = jnp.take_along_axis(estimated_score_cumsum <= quantile, estimated_score_sorted.argsort(axis=1), axis=1)
+        return estimated_score, prediction_sets
     
-    
-
 class ConformalRAPS:
     pass
