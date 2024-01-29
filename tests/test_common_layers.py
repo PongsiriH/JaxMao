@@ -17,6 +17,24 @@ import tensorflow as tf
 from tensorflow import keras
 tf.keras.backend.set_floatx('float32')
 
+if __name__ == '__main__':
+    from jax import lax
+    import jax.numpy as jnp
+    @jax.jit
+    def f():
+        key = jax.random.key(44)
+        gamma = 0.1
+        block_size = (2, 2)
+        inputs = jax.random.normal(key, (5, 5, 5, 1))
+        mask = jax.random.bernoulli(key, gamma, inputs.shape)
+        mask = lax.reduce_window(mask, False, jnp.logical_or, (1,)+block_size+(1,), (1, 1, 1, 1), 'SAME')
+        out0 = inputs * mask
+        return out0
+    # # out1 = jnp.take(inputs, mask, axis=1)
+    # print('orig inputs[0]:\n', inputs[0,..., 0])
+    out0 = f()
+    print('mask inputs[0]:\n', out0.shape, out0[0,..., 0])
+
 class TestDense:
     def test_all(self):
         """Run all test methods for the Dense layer."""
