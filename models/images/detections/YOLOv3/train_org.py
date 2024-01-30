@@ -4,7 +4,7 @@ import numpy as np
 
 from jaxmao import Bind
 from model import load_model
-from YOLOv3_3.backbone.model import *
+from backbone.model import *
 from loss import YOLOanchorLoss_2bboxes
 from dataset import YOLODataset
 import jaxmao.nn.optimizers as optim

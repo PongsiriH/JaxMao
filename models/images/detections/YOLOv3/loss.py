@@ -1,4 +1,4 @@
-from YOLOv3_2.utils import xywh2xyxy
+from utils import xywh2xyxy
 from jaxmao.nn.losses import Loss, BCEWithLogitsLoss, CCEWithLogitsLoss, MeanSquaredError, CategoricalCrossEntropy
 import jax.numpy as jnp
 import numpy as np

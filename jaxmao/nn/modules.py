@@ -87,7 +87,7 @@ class Bind:
 
         num_batches = inputs.shape[0] // batch_size
         remaining_batch = inputs.shape[0] % batch_size
-        outputs = np.zeros(shape=[inputs.shape[0]]+ list(self.module(inputs[:1]).shape[1:]))
+        outputs = np.zeros(shape=[inputs.shape[0], ]+ list(self.module(inputs[:1]).shape[1:]))
         jitted_module = jax.jit(self.module.__call__)
         for batch_idx in range(num_batches):
             starting_idx = batch_idx * batch_size
@@ -186,7 +186,7 @@ class Bind:
                     predictions[i][starting_idx:ending_idx] = output
             else:
                 predictions[starting_idx:ending_idx] = jitted_module(inputs)
-            labels.append(targets)
+            labels += targets # append 
             starting_idx = ending_idx
 
         evaluation_result = eval_fn(predictions, labels)
