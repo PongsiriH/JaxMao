@@ -89,7 +89,7 @@ def bbox_ciou(bboxes1, bboxes2):
     ciou = iou - (center_distance / jnp.maximum(enclose_diagonal, 1e-6)) - alpha * v
     return ciou
 
-class YOLOanchorLoss_2bboxes(Loss):
+class YOLOv3Loss(Loss):
     def __init__(self, lambda_box, lambda_obj, lambda_noobj, lambda_class):
         self.lambda_box = lambda_box 
         self.lambda_obj = lambda_obj

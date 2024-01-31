@@ -358,7 +358,7 @@ def compute_iou(bbox1, bbox2, box_format='corners', eps=1e-6, stop_gradient=Fals
         iou = lax.stop_gradient(iou)
     return iou
 
-def nms(bboxes, iou_threshold, threshold, box_format="corners", give_up=np.inf, use_np=False):
+def nms(bboxes, iou_threshold, threshold, box_format="corners", max_det=50, use_np=False):
     """
     Does Non Max Suppression given bboxes
 
@@ -377,9 +377,10 @@ def nms(bboxes, iou_threshold, threshold, box_format="corners", give_up=np.inf, 
     mask = bboxes[:, 1] >= threshold
     bboxes = bboxes[mask]
     sorted_indices  = np.argsort(bboxes[:, 1])[::-1]
-    bboxes = bboxes[sorted_indices]
+    bboxes = bboxes[sorted_indices][:max_det]
     # print("bboxes.shape after: ", bboxes.shape)
     bboxes_after_nms = []
+    
     if use_np:
         raise NotImplementedError("use_np has not been implemented")
         ious_mesh = compute_iou(bboxes[:, 2:], bboxes[:, 2:], box_format)
