@@ -150,6 +150,16 @@ class ScalePrediction(Module):
             .reshape(x.shape[0], 3, x.shape[1], x.shape[2], self.C+5)
         )  
 
+class ScalePredictionv2(Module):
+    def __init__(self, in_channels, num_classes):
+        super().__init__()
+        self.C = num_classes
+        out_channels = 3*(self.C+5) # 3 anchors
+        self.pred = Sequential([
+            ConvBnLRelu(in_channels, in_channels * 2, kernel_size=3),
+            Conv2d(in_channels * 2, out_channels, kernel_size=1, kernel_init=init.GlorotUniform()),
+        ])
+        
 class Upsample(Module):
     def __init__(self, factor, method='nearest'):
         super().__init__()
