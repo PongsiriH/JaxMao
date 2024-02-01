@@ -10,7 +10,7 @@ bce_logit = BCEWithLogitsLoss(reduce_fn=None, keepdims=True)
 cce = CategoricalCrossEntropy(reduce_fn=None, keepdims=True)
 cce_logits = CCEWithLogitsLoss(reduce_fn=None, keepdims=True)
 
-def loss_iou(bbox1, bbox2, box_format='corners', eps=1e-6, stop_gradient=False):
+def bbox_ious(bbox1, bbox2, box_format='corners', eps=1e-6, stop_gradient=False):
     if box_format == 'corners':
         # Converting boxes from (x, y, w, h) to (xmin, ymin, xmax, ymax)
         bbox1_xyxy = jnp.concatenate([bbox1[..., :2] - bbox1[..., 2:] / 2.0,
@@ -112,7 +112,9 @@ class YOLOv3Loss(Loss):
         no_object_loss = bce_logit(predictions[..., 0:1], targets[..., 0:1])
         no_object_loss = (mask_noobj * no_object_loss).sum()
         
-        object_loss = bce_logit(predictions[..., 0:1], targets[..., 0:1])
+        ious = bbox_ious(predictions[..., 1:5], targets[..., 1:5], "midpoint")
+        ious = jnp.expand_dims(ious, -1)
+        object_loss = bce_logit(predictions[..., 0:1], ious * targets[..., 0:1])
         object_loss = (mask_obj * object_loss).sum()
         
         # targets = targets.at[..., 3:5].set(jnp.where(targets[..., 3:5] == 0, self.eps, targets[..., 3:5]))
@@ -138,3 +140,12 @@ class YOLOv3Loss(Loss):
         }
             
         return total_loss, loss_components
+    
+
+if __name__ == "__main__":
+    import config
+    yolo_loss = YOLOv3Loss(1, 1, 1, 1)
+    predicitons = jnp.array(np.random.normal(0, 1, (16, 3, 26, 26, 12)))
+    targets = jnp.array(np.random.normal(0, 1, (16, 3, 26, 26, 6)))
+    anchors = jnp.array(config.ANCHORS[0])
+    yolo_loss.calculate_loss(predicitons, targets, anchors)
