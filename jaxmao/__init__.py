@@ -4,7 +4,7 @@ from jaxmao.nn.modules import (
     Dense, 
     GeneralConv2d, Conv2d, Conv2dTransposed, 
     BatchNormalization, BatchNorm1d, BatchNorm2d, 
-    Dropout, 
+    Dropout, DropBlock, 
     Pooling2d, MaxPooling2d, AveragePooling2d, 
     GlobalMaxPooling2d, GlobalAveragePooling2d,
     LeakyReLU

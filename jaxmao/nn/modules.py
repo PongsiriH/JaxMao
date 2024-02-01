@@ -619,6 +619,7 @@ class Dropout(Module):
             keep_rate = 1 - self.state('drop_rate')            
             mask = jax.random.bernoulli(key_mask, keep_rate, inputs.shape)
             self.set_value('seed', jax.random.randint(key_seed, (), 0, MAX_UINT32 // 2) )
+
             return inputs * mask / (keep_rate+1e-8)
         return inputs
 
