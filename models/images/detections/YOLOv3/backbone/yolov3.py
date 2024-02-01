@@ -1,4 +1,21 @@
-from model import *
+from YOLOv3.backbone.model import *
+
+class ScalePredictionv2(Module):
+    def __init__(self, in_channels, num_classes):
+        super().__init__()
+        self.C = num_classes
+        out_channels = 3*(self.C+5) # 3 anchors
+        self.pred = Sequential([
+            ConvBnLRelu(in_channels, in_channels * 2, kernel_size=3),
+            Conv2d(in_channels * 2, out_channels, kernel_size=1, kernel_init=init.GlorotUniform()),
+        ])
+        
+    def call(self, x):
+        # x : [bs, w, h, c*3] -> [bs, 3, w, h, c]
+        return (
+            self.pred(x)
+            .reshape(x.shape[0], 3, x.shape[1], x.shape[2], self.C+5)
+        )  
 
 class YOLOv3Model(Module):
     def __init__(self, config=[backbone_config, yolo_head_config], in_channels=3, num_classes=100, clf_mode=True):
