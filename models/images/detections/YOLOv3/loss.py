@@ -101,36 +101,35 @@ class YOLOv3Loss(Loss):
         """
         predictions: (N, num_anchors, S, S, 4+1+num_class)
         """
-        mask_obj = jnp.array(targets[..., :1] == 1, dtype=jnp.float32)
-        mask_noobj = jnp.array(targets[..., :1] == 0, dtype=jnp.float32)
-        mask_not_noobj = jnp.array(~(targets[..., :1] == 0), dtype=jnp.float32)
+        mask_obj = targets[..., :1] == 1
+        mask_noobj = targets[..., :1] == 0
         anchors = anchors.reshape(1, len(anchors), 1, 1, 2) * np.reshape(np.array(predictions.shape[2:4]), (1, 1, 1, 1, 2))
         
         predictions = predictions.at[..., 1:3].set(2 * jax.nn.sigmoid(predictions[..., 1:3]) - 0.5)
         predictions = predictions.at[..., 3:5].set(4 * jnp.square(jax.nn.sigmoid(predictions[..., 3:5])) * anchors)
         
         no_object_loss = bce_logit(predictions[..., 0:1], targets[..., 0:1])
-        no_object_loss = (mask_noobj * no_object_loss).sum()
+        no_object_loss = jnp.where(mask_noobj, no_object_loss, 0).sum()
         
         ious = bbox_ious(predictions[..., 1:5], targets[..., 1:5], "midpoint")
         ious = jnp.expand_dims(ious, -1)
         object_loss = bce_logit(predictions[..., 0:1], ious * targets[..., 0:1])
-        object_loss = (mask_obj * object_loss).sum()
+        object_loss = jnp.where(mask_obj, object_loss, 0).sum()
         
         # targets = targets.at[..., 3:5].set(jnp.where(targets[..., 3:5] == 0, self.eps, targets[..., 3:5]))
         # targets = targets.at[..., 3:5].set(jnp.log(targets[..., 3:5] / anchors))
         box_loss = mse(predictions[..., 1:5], targets[..., 1:5])
-        box_loss = (mask_obj* box_loss).sum()
+        box_loss = jnp.where(mask_obj, box_loss, 0).sum()
         
         class_loss = cce_logits(predictions[..., 5:], jax.nn.one_hot(targets[..., 5], num_classes=predictions.shape[-1]-5))
-        class_loss = (mask_not_noobj * class_loss).sum()
+        class_loss = jnp.where(~mask_noobj, class_loss, 0).sum()
         
-        box_loss = self.lambda_box * jnp.sum(box_loss) / targets.shape[0]
-        object_loss = self.lambda_obj * jnp.sum(object_loss) / targets.shape[0]
-        no_object_loss = self.lambda_noobj * jnp.sum(no_object_loss) / targets.shape[0]
-        class_loss = self.lambda_class * jnp.sum(class_loss) / targets.shape[0]
+        box_loss = self.lambda_box * box_loss
+        object_loss = self.lambda_obj * object_loss
+        no_object_loss = self.lambda_noobj * no_object_loss
+        class_loss = self.lambda_class * class_loss
         
-        total_loss = box_loss + object_loss + no_object_loss + class_loss
+        total_loss = (box_loss + object_loss + no_object_loss + class_loss) / targets.shape[0]
         
         loss_components = {
             'bbox_loss' : box_loss,
