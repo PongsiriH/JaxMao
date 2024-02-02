@@ -106,22 +106,22 @@ class YOLOv3Loss(Loss):
         anchors = anchors.reshape(1, len(anchors), 1, 1, 2) * np.reshape(np.array(predictions.shape[2:4]), (1, 1, 1, 1, 2))
         
         predictions = predictions.at[..., 1:3].set(2 * jax.nn.sigmoid(predictions[..., 1:3]) - 0.5)
-        predictions = predictions.at[..., 3:5].set(4 * jnp.square(jax.nn.sigmoid(predictions[..., 3:5])) * anchors)
+        predictions = predictions.at[..., 3:5].set(jnp.square(2 * jax.nn.sigmoid(predictions[..., 3:5])) * anchors)
         
         no_object_loss = bce_logit(predictions[..., 0:1], targets[..., 0:1])
-        no_object_loss = (mask_noobj * no_object_loss).sum()
+        no_object_loss = jnp.where(mask_noobj, no_object_loss, 0).sum()
         
         # ious = bbox_ious(predictions[..., 1:5], targets[..., 1:5], "midpoint")
         # ious = jnp.expand_dims(ious, -1)
         ious = 1
         object_loss = bce_logit(predictions[..., 0:1], ious * targets[..., 0:1])
-        object_loss = (mask_obj * object_loss).sum()
+        object_loss = jnp.where(mask_obj, object_loss, 0).sum()
         
         box_loss = mse(predictions[..., 1:5], targets[..., 1:5])
-        box_loss = (mask_obj * box_loss).sum()
+        box_loss = jnp.where(mask_obj, box_loss, 0).sum()
         
-        class_loss = cce_logits(predictions[..., 5:], jax.nn.one_hot(targets[..., 5], num_classes=predictions.shape[-1]-5))
-        class_loss = (mask_obj * class_loss).sum()
+        class_loss = bce_logit(predictions[..., 5:], jax.nn.one_hot(targets[..., 5], num_classes=predictions.shape[-1]-5))
+        class_loss = jnp.where(mask_obj, class_loss, 0).sum()
         
         box_loss = self.lambda_box * box_loss
         object_loss = self.lambda_obj * object_loss
