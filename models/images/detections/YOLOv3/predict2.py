@@ -47,7 +47,7 @@ loader = DataLoader(dataset=dataset, batch_size=10, shuffle=True)
 
 print('loading model...')
 # model, params, states = load_model("YOLOv3_3/v1-stop_signs/best_yolov3_iter0.pkl")
-model, params, states = load_model("YOLOv3_ciou_greate.pkl") # r17
+model, params, states = load_model("YOLOv3_RoadSign5.pkl") # r17
     
 for data in loader:
     if not dataset_path_index in NO_LABELS_LIST:

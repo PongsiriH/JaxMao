@@ -172,7 +172,7 @@ def save_best_model(filename, model, params, states, best_params):
 		
 if __name__ == '__main__':
 	image_sizes = [(224, 224), (256, 256), (320,320), (352, 352), (416, 416)]
-	# image_sizes = [(320,320),]
+	image_sizes = [(320,320),]
 	NUM_CLASSES = 4
 	# image_sizes = [(240, 240), (320, 320), (352, 352), (416, 416),]
 	# image_sizes = [(240, 240), (320, 320), (352, 352), (416, 416), (480, 480), (640, 640)]
@@ -208,7 +208,7 @@ if __name__ == '__main__':
 		model.set_trainable(True)
 		for lidx, layer in enumerate(model.backbone.submodules.values()):
 			layer.set_trainable(False)
-			if lidx == 8: break
+			if lidx == 6: break
 
 		loss_lambdas = {'lambda_box': 1, 'lambda_obj': 5, 'lambda_noobj': 1.5 , 'lambda_class': 1.5}
 		hyperparameters = {

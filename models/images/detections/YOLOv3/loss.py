@@ -132,13 +132,14 @@ class YOLOv3Loss(Loss):
                 return jnp.concatenate([bbox[..., :2] - bbox[..., 2:] / 2.0, bbox[..., :2] + bbox[..., 2:] / 2.0], axis=-1)
 
             cious = 1 - bbox_ciou(xywh2xyxy(predictions[..., 1:5]), xywh2xyxy(targets[..., 1:5]))
-
+            cious = jnp.expand_dims(cious, -1)
+            cious = jnp.where(mask_obj, cious, 0)
             if self.ciou_loss == 'sum':
-                box_loss += cious.sum()
-            elif self.ciou_loss == 'ciou':
                 box_loss = cious.sum()
+            elif self.ciou_loss == 'mean':
+                box_loss = cious.mean()
             else:
-                raise NotImplemented("CIOU only have option ['sum', 'ciou']")
+                raise NotImplemented("CIOU only have option ['sum', 'mean']")
         
         class_loss = self.logsmxce(predictions[..., 5:], jax.nn.one_hot(targets[..., 5], num_classes=predictions.shape[-1]-5))
         class_loss = jnp.where(mask_obj, class_loss, 0).sum()
