@@ -265,7 +265,7 @@ def cells_to_bboxes(predictions: np.ndarray, anchors: np.ndarray, is_preds=True)
     if is_preds:
         anchors = anchors * S
         box_predictions[..., :2] = 2 * (np.array(jax.nn.sigmoid(box_predictions[..., :2]))) - 0.5
-        box_predictions[..., 2:] = np.array(4 * np.square(jax.nn.sigmoid(box_predictions[..., 2:]))) * anchors
+        box_predictions[..., 2:] = np.array(np.square(2 * jax.nn.sigmoid(box_predictions[..., 2:]))) * anchors
         # box_predictions[..., 2:] = anchors * np.exp(box_predictions[..., 2:])
         best_class = jnp.argmax(predictions[..., 5:], axis=-1)[..., None]
         scores = jax.nn.sigmoid(predictions[..., 0:1]) # * jax.nn.softmax(jnp.max(predictions[..., 5:], axis=-1)[..., None])
@@ -518,10 +518,10 @@ def mean_avg_precision(y_pred, y_true):
         gts.append(cells_to_bboxes(y_true[i], anchors, is_preds=False))
     
     conf_thresh = np.mean([np.quantile(y[..., 0].ravel(), q=0.99) for y in y_pred])
-    print(len(pred), len(gts))
+    # print(len(pred), len(gts))
     for j in range(len(y_true[0])):
-        print("pred:", [len(p[j]) for p in pred])
-        print("gts:", [len(p[j]) for p in gts])
+        # print("pred:", [len(p[j]) for p in pred])
+        # print("gts:", [len(p[j]) for p in gts])
         
         converted_preds, converted_gts = prepare_data_for_map(
             nms(np.concatenate([p[j] for p in pred], axis=0), iou_threshold=0.4, threshold=conf_thresh, box_format="midpoint"), 

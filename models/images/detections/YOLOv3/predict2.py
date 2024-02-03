@@ -5,7 +5,7 @@ from utils import cells_to_bboxes, plot_image, nms
 from dataset import ImageDataset, YOLODataset, DataLoader, YOLODatasetThreeAnchors
 from torchvision import datasets
 from model import load_model
-from YOLOv3_2.backbone.model import *
+from backbone.model import *
 from jaxmao import Bind
 import jax
 import jax.numpy as jnp
@@ -15,7 +15,7 @@ from pprint import pprint
 dataset_path = ['/home/jaxmao/dataset/GTSDB_YOLO/images/train',  
                 '/home/jaxmao/dataset/GTSDB_YOLO/images/test', 
                 '/home/jaxmao/dataset/GTSDB_YOLO/images/16examples', 
-                '/home/jaxmao/dataset/Road Sign Dataset/images', # 3
+                '/home/jaxmao/dataset/Road Sign Dataset/images/train', # 3
                 "/home/jaxmao/dataset/coco128/images/train2017",
                 '/home/jaxmao/dataset/GTSDB_YOLO/images/train300', # 5
                 '/home/jaxmao/dataset/GTSDB_YOLO/images/val200',
@@ -24,7 +24,7 @@ dataset_path = ['/home/jaxmao/dataset/GTSDB_YOLO/images/train',
                 '/home/jaxmao/dataset/BelTS_YOLO/images/test_cat', # 9
                 ]
 
-dataset_path_index = 8
+dataset_path_index = 3
 NO_LABELS_LIST = [1, ]
 
 
@@ -34,9 +34,9 @@ if dataset_path_index in NO_LABELS_LIST:
         transform=config.build_test_transform(416),
     )
 else:
-    dataset = YOLODatasetThreeAnchors(
+    dataset = YOLODataset(
         dataset_path[dataset_path_index],
-        image_sizes=[(416, 416)],
+        image_sizes=[(320, 320)],
         anchors=config.ANCHORS,
         builder_transform=config.build_test_transform,
         # cutmix=True,
@@ -47,7 +47,7 @@ loader = DataLoader(dataset=dataset, batch_size=10, shuffle=True)
 
 print('loading model...')
 # model, params, states = load_model("YOLOv3_3/v1-stop_signs/best_yolov3_iter0.pkl")
-model, params, states = load_model("yolov3_3_results28/best_yolov3_iter1.pkl") # r17
+model, params, states = load_model("YOLOv3_ciou_greate.pkl") # r17
     
 for data in loader:
     if not dataset_path_index in NO_LABELS_LIST:

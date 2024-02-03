@@ -1,14 +1,9 @@
 from utils import xywh2xyxy
-from jaxmao.nn.losses import Loss, BCEWithLogitsLoss, CCEWithLogitsLoss, MeanSquaredError, CategoricalCrossEntropy
+from jaxmao.nn.losses import Loss, BCEWithLogitsLoss, MeanSquaredError, CCEWithLogitsLoss, CategoricalCrossEntropy, LogSoftmaxCrossEntropy
 import jax.numpy as jnp
 import numpy as np
 import jax
 import jax.lax as lax
-
-mse = MeanSquaredError(reduce_fn=None, keepdims=True)
-bce_logit = BCEWithLogitsLoss(reduce_fn=None, keepdims=True)
-cce = CategoricalCrossEntropy(reduce_fn=None, keepdims=True)
-cce_logits = CCEWithLogitsLoss(reduce_fn=None, keepdims=True)
 
 def bbox_ious(bbox1, bbox2, box_format='corners', eps=1e-6, stop_gradient=False):
     if box_format == 'corners':
@@ -90,13 +85,22 @@ def bbox_ciou(bboxes1, bboxes2):
     return ciou
 
 class YOLOv3Loss(Loss):
-    def __init__(self, lambda_box, lambda_obj, lambda_noobj, lambda_class):
+    def __init__(self, lambda_box, lambda_obj, lambda_noobj, lambda_class, 
+                 iou_scale=False, ciou_loss=False):
         self.lambda_box = lambda_box 
         self.lambda_obj = lambda_obj
         self.lambda_noobj = lambda_noobj
         self.lambda_class = lambda_class
+        self.iou_scale = iou_scale
+        self.ciou_loss = ciou_loss
         self.eps = 1e-6
-
+        
+        self.mse = MeanSquaredError(reduce_fn=None, keepdims=True)
+        self.bce_logit = BCEWithLogitsLoss(reduce_fn=None, keepdims=True)
+        self.cce = CategoricalCrossEntropy(reduce_fn=None, keepdims=True)
+        self.cce_logit = CCEWithLogitsLoss(reduce_fn=None, keepdims=True)
+        self.logsmxce = LogSoftmaxCrossEntropy(reduce_fn=None, keepdims=True)
+        
     def calculate_loss(self, predictions, targets, anchors):
         """
         predictions: (N, num_anchors, S, S, 4+1+num_class)
@@ -108,19 +112,35 @@ class YOLOv3Loss(Loss):
         predictions = predictions.at[..., 1:3].set(2 * jax.nn.sigmoid(predictions[..., 1:3]) - 0.5)
         predictions = predictions.at[..., 3:5].set(jnp.square(2 * jax.nn.sigmoid(predictions[..., 3:5])) * anchors)
         
-        no_object_loss = bce_logit(predictions[..., 0:1], targets[..., 0:1])
+        no_object_loss = self.bce_logit(predictions[..., 0:1], targets[..., 0:1])
         no_object_loss = jnp.where(mask_noobj, no_object_loss, 0).sum()
         
-        # ious = bbox_ious(predictions[..., 1:5], targets[..., 1:5], "midpoint")
-        # ious = jnp.expand_dims(ious, -1)
+        
         ious = 1
-        object_loss = bce_logit(predictions[..., 0:1], ious * targets[..., 0:1])
+        if self.iou_scale:
+            ious = bbox_ious(predictions[..., 1:5], targets[..., 1:5], "midpoint")
+            ious = jnp.expand_dims(ious, -1)
+        ious = jax.lax.stop_gradient(ious)
+        object_loss = self.bce_logit(predictions[..., 0:1], ious * targets[..., 0:1])
         object_loss = jnp.where(mask_obj, object_loss, 0).sum()
         
-        box_loss = mse(predictions[..., 1:5], targets[..., 1:5])
+        box_loss = self.mse(predictions[..., 1:5], targets[..., 1:5])
         box_loss = jnp.where(mask_obj, box_loss, 0).sum()
         
-        class_loss = bce_logit(predictions[..., 5:], jax.nn.one_hot(targets[..., 5], num_classes=predictions.shape[-1]-5))
+        if isinstance(self.ciou_loss, str) and self.ciou_loss != 'none':
+            def xywh2xyxy(bbox):
+                return jnp.concatenate([bbox[..., :2] - bbox[..., 2:] / 2.0, bbox[..., :2] + bbox[..., 2:] / 2.0], axis=-1)
+
+            cious = 1 - bbox_ciou(xywh2xyxy(predictions[..., 1:5]), xywh2xyxy(targets[..., 1:5]))
+
+            if self.ciou_loss == 'sum':
+                box_loss += cious.sum()
+            elif self.ciou_loss == 'ciou':
+                box_loss = cious.sum()
+            else:
+                raise NotImplemented("CIOU only have option ['sum', 'ciou']")
+        
+        class_loss = self.logsmxce(predictions[..., 5:], jax.nn.one_hot(targets[..., 5], num_classes=predictions.shape[-1]-5))
         class_loss = jnp.where(mask_obj, class_loss, 0).sum()
         
         box_loss = self.lambda_box * box_loss
