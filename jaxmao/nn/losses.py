@@ -84,6 +84,11 @@ class FocalLossLogit(Loss):
         
 class CCEWithLogitsLoss(Loss):
     def call(self, logits, y_true):
-        return self.reduce_fn(
-            -jnp.sum(y_true * jax.nn.log_softmax(logits, axis=-1), axis=-1, keepdims=self.keepdims)
-            )
+        loss = -jnp.sum(y_true * jax.nn.log_softmax(logits, axis=-1), axis=-1, keepdims=self.keepdims)
+        return self.reduce_fn(loss)
+
+class LogSoftmaxCrossEntropy(Loss):
+    def call(self, logits, y_true):
+        log_softmax_logits = logits - jax.nn.logsumexp(logits, axis=-1, keepdims=True)
+        loss = -jnp.sum(y_true * log_softmax_logits, axis=-1, keepdims=True)
+        return self.reduce_fn(loss)

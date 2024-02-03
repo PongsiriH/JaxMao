@@ -12,7 +12,7 @@ WEIGHT_DECAY = 1e-4
 NUM_EPOCHS = 100
 CONF_THRESHOLD = 0.005
 MAP_IOU_THRESH = 0.5
-NMS_IOU_THRESH = 0.02
+NMS_IOU_THRESH = 0.01
 S = [IMAGE_SIZE // 32, IMAGE_SIZE // 16, IMAGE_SIZE // 8]
 PIN_MEMORY = True
 LOAD_MODEL = True
@@ -36,7 +36,7 @@ gtsdb_anchors = [
     [[0.05588235, 0.0925    ], [0.06617647, 0.1125    ], [0.08455882, 0.1375    ]]
     ]
 
-ANCHORS = gtsdb_anchors
+# ANCHORS = gtsdb_anchors
 # ANCHORS = [
 #       [(0.25, 0.25), (0.4, 0.4), (0.8, 0.8)],
 #     [(0.1, 0.1), (0.15, 0.15), (0.2, 0.2)],

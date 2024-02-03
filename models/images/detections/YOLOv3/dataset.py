@@ -56,8 +56,10 @@ class YOLODataset(Dataset):
         # self.num_anchors_per_scale = self.num_anchors
         self.C = C
         self.ignore_iou_thresh = 0.5
-        self.cutmix = cutmix
-        self.mosaic = mosaic
+        self.cutmix = 0 if cutmix == False else cutmix
+        self.mosaic = 0 if mosaic == False else mosaic
+        self.prob_cutmix = self.cutmix
+        self.prob_mosaic = self.mosaic
         self.builder_transform = builder_transform
         self.builder_mosaic_transform = builder_mosaic_transform
         self.builder_cutmix_transform = builder_cutmix_transform
@@ -79,12 +81,12 @@ class YOLODataset(Dataset):
         return len(self.img_dir)
 
     def __getitem__(self, index):
-        if self.cutmix and np.random.binomial(1, p=0.4):
+        if self.cutmix and np.random.binomial(1, p=self.prob_cutmix):
             indices = [random.randint(0, len(self.img_dir) - 1) for _ in range(2)]
             img_paths = [self.img_dir[i] for i in indices]
             label_paths = [self.label_dir[i] for i in indices]
             image, labels = cutmix_object_detection_using_paths(img_paths, label_paths, alpha=1.0, format="xywh", transform=self.builder_cutmix_transform, return_dict=True)
-        elif self.mosaic and np.random.binomial(1, p=0.4):
+        elif self.mosaic and np.random.binomial(1, p=self.prob_mosaic):
             indices = [random.randint(0, len(self.img_dir) - 1) for _ in range(4)]
             img_paths = [self.img_dir[i] for i in indices]
             label_paths = [self.label_dir[i] for i in indices]

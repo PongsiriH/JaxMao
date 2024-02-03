@@ -8,6 +8,7 @@ class ScalePredictionv2(Module):
         self.pred = Sequential([
             ConvBnLRelu(in_channels, in_channels * 2, kernel_size=3),
             Conv2d(in_channels * 2, out_channels, kernel_size=1, kernel_init=init.GlorotUniform()),
+            BatchNorm2d(out_channels)
         ])
         
     def call(self, x):
