@@ -210,9 +210,9 @@ if __name__ == '__main__':
 			layer.set_trainable(False)
 			if lidx == 6: break
 
-		loss_lambdas = {'lambda_box': 1, 'lambda_obj': 5, 'lambda_noobj': 1.5 , 'lambda_class': 1.5}
+		loss_lambdas = {'lambda_box': 0.5, 'lambda_obj': 5, 'lambda_noobj': 1.5 , 'lambda_class': 1.5}
 		hyperparameters = {
-			'lr0' : 1e-3,
+			'lr0' : 5e-4,
 			'lr1' : 5e-5,
 			'weight_decay' : 0.95
 		}

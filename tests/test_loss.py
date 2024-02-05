@@ -262,7 +262,7 @@ if __name__ == '__main__':
     # cce.test_all()
     
     # # good
-    # bce_logit = TestBCELogit(shapes=(2, 2))
+    # bce_logit = TestBCELogit(shapes=(2, 2)) # https://stackoverflow.com/questions/68163153/implementing-binary-cross-entropy-from-scratch-inconsistent-results-in-trainin
     # bce_logit.test_values()
     # bce_logit.test_all()
 

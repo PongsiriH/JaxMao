@@ -323,6 +323,7 @@ def plot_image(image, boxes):
             s=class_pred,
             color="white",
             verticalalignment="top",
+            bbox={"facecolor": "black", "pad": 0},
             # bbox={"color": colors[int(class_pred)], "pad": 0},
             # bbox={"color": int(class_pred), "pad": 0},
         )
